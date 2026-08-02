@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+.vscode/
+.claude/
+.agents/
+
+debug_html/
+fixtures_debug.html
