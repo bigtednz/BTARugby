@@ -27,7 +27,19 @@ from playwright.async_api import async_playwright
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 SEASON           = 2026
-TARGET_SEASONS   = [2023, 2024, 2025, 2026]
+
+def parse_target_seasons(default):
+    raw = os.getenv("NPC_TARGET_SEASONS", "").strip()
+    if not raw:
+        return default
+    years = []
+    for item in raw.split(","):
+        item = item.strip()
+        if item:
+            years.append(int(item))
+    return years
+
+TARGET_SEASONS   = parse_target_seasons([2023, 2024, 2025, 2026])
 COMPETITION_CODE = "NPC"
 COMPETITION_NAME = "Hilux NPC"
 TOURNAMENT_URI   = "bunnings-npc"
@@ -566,6 +578,34 @@ def parse_current_game_days(content: str) -> dict:
     return games
 
 
+async def fetch_fixture_archive(page, season_year: int):
+    """
+    RugbyPass uses an internal Opta season number one higher than the display
+    year for NPC: display 2025 is posted as season=2026.
+    """
+    opta_season = season_year + 1
+    result = await page.evaluate(
+        """async ({url, season}) => {
+            const body = new FormData();
+            body.append("action", "filter-fixtures");
+            body.append("season", String(season));
+            body.append("team", "0");
+            body.append("comp", "0");
+            body.append("isContent", "1");
+
+            const response = await fetch(url.replace(/\\/$/, ""), {
+                method: "POST",
+                body,
+                credentials: "same-origin",
+                headers: {"X-Requested-With": "XMLHttpRequest"}
+            });
+            return await response.json();
+        }""",
+        {"url": FIXTURES_URL, "season": opta_season},
+    )
+    return result or {}
+
+
 # ── STEP 1: DISCOVER GAME IDs ─────────────────────────────────────────────────
 async def get_game_ids(page, conn=None):
     log.info("Loading fixtures page to discover game IDs...")
@@ -626,6 +666,32 @@ async def get_game_ids(page, conn=None):
     games = parse_current_game_days(content)
     if games:
         log.info(f"current-game-days: {len(games)} {TOURNAMENT_URI} games")
+
+    for target_season in TARGET_SEASONS:
+        if target_season == SEASON:
+            continue
+        try:
+            archive = await fetch_fixture_archive(page, target_season)
+        except Exception as exc:
+            log.warning(f"Could not load {target_season} fixtures: {exc}")
+            continue
+
+        write_bronze_snapshot(
+            conn,
+            source_entity="fixtures",
+            source_entity_id=f"{COMPETITION_CODE}-{target_season}",
+            source_url=f"{FIXTURES_URL}?season={target_season}",
+            content=json.dumps(archive),
+            content_type="application/json",
+            source_season=target_season,
+        )
+
+        archive_days = archive.get("currentGameDays", [])
+        archive_games = parse_current_game_days(
+            f'<div id="current-game-days">{html_lib.escape(json.dumps(archive_days))}</div>'
+        )
+        log.info(f"archive fixtures {target_season}: {len(archive_games)} {TOURNAMENT_URI} games")
+        games.update(archive_games)
 
     # ── Primary: __NEXT_DATA__ embedded JSON ──────────────────────────────────
     next_data = parse_next_data(content)
@@ -1486,7 +1552,7 @@ async def main():
         log.info(f"Processing {len(games)} matches...")
         success, failed = 0, []
 
-        for i, (game_id, _) in enumerate(games.items(), 1):
+        for i, (game_id, fixture_info) in enumerate(games.items(), 1):
             log.info(f"[{i}/{len(games)}] Game ID {game_id}")
             try:
                 cur.execute(
@@ -1497,7 +1563,18 @@ async def main():
                     f"SELECT COUNT(*) FROM {PLAYER_APPEARANCES_TABLE} WHERE MatchID = ?", game_id
                 )
                 appearance_count = cur.fetchone()[0]
-                if player_stat_count > 0 and appearance_count > 0:
+                cur.execute("""
+                    SELECT COUNT(DISTINCT SourceEntity)
+                    FROM Bronze_SourceSnapshots
+                    WHERE SourceEntityID = ?
+                      AND SourceEntity IN ('player-stats', 'team-sheets')
+                """, str(game_id))
+                scrape_attempt_count = cur.fetchone()[0]
+                is_historical = (fixture_info.get("season") or SEASON) < SEASON
+                if (
+                    (player_stat_count > 0 and appearance_count > 0)
+                    or (is_historical and scrape_attempt_count >= 2)
+                ):
                     log.info("  → Already in DB, skipping")
                     continue
 
