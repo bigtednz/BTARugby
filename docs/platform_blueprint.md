@@ -147,6 +147,31 @@ Current reporting views:
 - `vw_Gold_MarginModelComparison`
 - `vw_Gold_MarginChampionStatus`
 - `vw_Gold_CombinedUpcomingPredictions`
+- `vw_Gold_ProductionUpcomingPredictions`
+- `vw_Gold_ProductionHistoricalPredictions`
+- `vw_Gold_ProductionMatchExplanation`
+- `vw_Gold_ProductionModelSummary`
+- `vw_Gold_ProductionCalibration`
+- `vw_Gold_ProductionDataQuality`
+- `vw_Gold_ProductionPipelineRuns`
+
+### Phase 4: Production Predictions and Reporting
+
+`Production Predictions and Reporting Layer v0.4.0` makes the validated Elo-only model operational for scheduled NPC fixtures.
+
+Production champion registry:
+- `EloOnlyBaseline v0.2.0` is active for win probability.
+- `EloOnlyBaseline v0.2.0` is active as the margin incumbent.
+- `RidgeMarginModel v0.3.0` is retained as rejected for margin traceability.
+
+Production prediction principles:
+- resolve champion models from SQL by model name/version, not hard-coded IDs
+- generate predictions only for scheduled NPC fixtures
+- store generation datetime and feature cutoff date
+- expose confidence bands based on largest win probability
+- keep provisional score estimates out of the main production view
+- block critical data-quality failures from production upcoming outputs
+- show form, rest-day, head-to-head and team-sheet fields as context only for Elo predictions
 
 ## Platform Surfaces
 
@@ -201,3 +226,4 @@ Candidate screens:
 6. Store predictions and backtest results.
 7. Build Power BI-ready views.
 8. Improve margin features before testing another margin champion.
+9. Build the first Power BI report from `docs/powerbi_reporting_guide.md`.

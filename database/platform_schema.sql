@@ -12,6 +12,10 @@ GO
 USE RugbyAnalytics;
 GO
 
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
+
 -- ============================================================
 -- Bronze: source captures
 -- ============================================================
@@ -367,6 +371,106 @@ CREATE TABLE Gold_CombinedForwardPredictions (
     CONSTRAINT UQ_Gold_CombinedForwardPredictions UNIQUE (
         MatchID, ProbabilityModelName, ProbabilityModelVersion, MarginModelName, MarginModelVersion
     )
+);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Gold_ModelDeploymentStatus')
+CREATE TABLE Gold_ModelDeploymentStatus (
+    ModelDeploymentStatusID BIGINT IDENTITY PRIMARY KEY,
+    TargetType              VARCHAR(50) NOT NULL,
+    ModelVersionID          INT NOT NULL REFERENCES Gold_ModelVersions(ModelVersionID),
+    DeploymentStatus        VARCHAR(20) NOT NULL,
+    EffectiveFrom           DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    EffectiveTo             DATETIME2 NULL,
+    SelectionReason         VARCHAR(1000) NOT NULL,
+    EvaluationEvidence      VARCHAR(1000) NULL,
+    IsActive                BIT NOT NULL DEFAULT 0,
+    SelectedAt              DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CreatedAt               DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT CK_Gold_ModelDeploymentStatus_Status CHECK (
+        DeploymentStatus IN ('Champion', 'Challenger', 'Rejected', 'Retired')
+    )
+);
+GO
+
+IF NOT EXISTS (
+    SELECT * FROM sys.indexes
+    WHERE name = 'UX_Gold_ModelDeploymentStatus_ActiveTarget'
+      AND object_id = OBJECT_ID('Gold_ModelDeploymentStatus')
+)
+CREATE UNIQUE INDEX UX_Gold_ModelDeploymentStatus_ActiveTarget
+ON Gold_ModelDeploymentStatus(TargetType)
+WHERE IsActive = 1;
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Gold_ProductionPredictions')
+CREATE TABLE Gold_ProductionPredictions (
+    ProductionPredictionID   BIGINT IDENTITY PRIMARY KEY,
+    MatchID                  INT NOT NULL REFERENCES Silver_Matches(MatchID),
+    ProbabilityModelVersionID INT NOT NULL REFERENCES Gold_ModelVersions(ModelVersionID),
+    MarginModelVersionID     INT NOT NULL REFERENCES Gold_ModelVersions(ModelVersionID),
+    PredictionGeneratedAt    DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    FeatureCutoffDate        DATE NULL,
+    HomeWinProbability       DECIMAL(9,6) NOT NULL,
+    DrawProbability          DECIMAL(9,6) NOT NULL,
+    AwayWinProbability       DECIMAL(9,6) NOT NULL,
+    PredictedHomeMargin      DECIMAL(9,3) NOT NULL,
+    PredictedWinner          CHAR(1) NOT NULL,
+    ConfidenceLevel          VARCHAR(20) NOT NULL,
+    HomePreMatchElo          DECIMAL(12,3) NULL,
+    AwayPreMatchElo          DECIMAL(12,3) NULL,
+    RawEloDifference         DECIMAL(12,3) NULL,
+    HomeAdvantageAdjustment  DECIMAL(12,3) NULL,
+    AdjustedEloDifference    DECIMAL(12,3) NULL,
+    ProbabilityContribution  DECIMAL(9,6) NULL,
+    HomePriorMatches         INT NOT NULL DEFAULT 0,
+    AwayPriorMatches         INT NOT NULL DEFAULT 0,
+    HomeRollingMargin        DECIMAL(12,3) NULL,
+    AwayRollingMargin        DECIMAL(12,3) NULL,
+    RestDaysDiff             INT NULL,
+    HeadToHeadContext        DECIMAL(12,3) NULL,
+    HomeTeamSheetAvailable   BIT NOT NULL DEFAULT 0,
+    AwayTeamSheetAvailable   BIT NOT NULL DEFAULT 0,
+    DataQualityStatus        VARCHAR(20) NOT NULL DEFAULT 'Pending',
+    CreatedAt                DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT UQ_Gold_ProductionPredictions UNIQUE (
+        MatchID, ProbabilityModelVersionID, MarginModelVersionID
+    )
+);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Gold_ProductionDataQualityIssues')
+CREATE TABLE Gold_ProductionDataQualityIssues (
+    ProductionDataQualityIssueID BIGINT IDENTITY PRIMARY KEY,
+    MatchID                      INT NULL REFERENCES Silver_Matches(MatchID),
+    Season                       INT NULL,
+    SourceSystem                 VARCHAR(50) NULL,
+    ProcessName                  VARCHAR(100) NOT NULL,
+    IssueCode                    VARCHAR(100) NOT NULL,
+    Severity                     VARCHAR(20) NOT NULL,
+    IssueMessage                 VARCHAR(1000) NOT NULL,
+    DetectedAt                   DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    IsBlocking                   BIT NOT NULL DEFAULT 0,
+    CONSTRAINT CK_Gold_ProductionDataQualityIssues_Severity CHECK (
+        Severity IN ('Critical', 'Warning', 'Information')
+    )
+);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Gold_PipelineRuns')
+CREATE TABLE Gold_PipelineRuns (
+    PipelineRunID      BIGINT IDENTITY PRIMARY KEY,
+    ProcessName        VARCHAR(100) NOT NULL,
+    StartedAt          DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CompletedAt        DATETIME2 NULL,
+    Status             VARCHAR(20) NOT NULL,
+    RecordsRead        INT NOT NULL DEFAULT 0,
+    RecordsWritten     INT NOT NULL DEFAULT 0,
+    WarningCount       INT NOT NULL DEFAULT 0,
+    ErrorCount         INT NOT NULL DEFAULT 0,
+    ModelVersion       VARCHAR(150) NULL,
+    ErrorSummary       VARCHAR(1000) NULL,
+    CreatedAt          DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
 );
 GO
 

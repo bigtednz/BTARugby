@@ -284,5 +284,174 @@ JOIN Silver_Teams at ON at.TeamID = m.AwayTeamID
 WHERE m.MatchStatus <> 'Completed';
 GO
 
+CREATE OR ALTER VIEW vw_Gold_ProductionUpcomingPredictions AS
+SELECT
+    pp.ProductionPredictionID,
+    m.MatchID,
+    m.MatchID AS SourceMatchID,
+    c.CompetitionCode AS Competition,
+    s.Season,
+    m.RoundName AS Round,
+    CAST(m.MatchDate AS DATETIME2) AS KickoffDateTime,
+    v.VenueName AS Venue,
+    ht.TeamID AS HomeTeamID,
+    ht.TeamName AS HomeTeam,
+    at.TeamID AS AwayTeamID,
+    at.TeamName AS AwayTeam,
+    m.MatchStatus,
+    pp.HomeWinProbability,
+    pp.DrawProbability,
+    pp.AwayWinProbability,
+    pp.PredictedHomeMargin,
+    CASE pp.PredictedWinner WHEN 'H' THEN ht.TeamName WHEN 'A' THEN at.TeamName ELSE 'Draw' END AS PredictedWinner,
+    pp.ConfidenceLevel,
+    pm.ModelName AS ProbabilityModelName,
+    pm.ModelVersion AS ProbabilityModelVersion,
+    mm.ModelName AS MarginModelName,
+    mm.ModelVersion AS MarginModelVersion,
+    pp.PredictionGeneratedAt,
+    pp.FeatureCutoffDate,
+    pp.DataQualityStatus,
+    pp.HomeTeamSheetAvailable,
+    pp.AwayTeamSheetAvailable,
+    pp.HomePriorMatches,
+    pp.AwayPriorMatches
+FROM Gold_ProductionPredictions pp
+JOIN Silver_Matches m ON m.MatchID = pp.MatchID
+JOIN Silver_Seasons s ON s.SeasonID = m.SeasonID
+JOIN Silver_Competitions c ON c.CompetitionID = s.CompetitionID
+JOIN Silver_Teams ht ON ht.TeamID = m.HomeTeamID
+JOIN Silver_Teams at ON at.TeamID = m.AwayTeamID
+LEFT JOIN Silver_Venues v ON v.VenueID = m.VenueID
+JOIN Gold_ModelVersions pm ON pm.ModelVersionID = pp.ProbabilityModelVersionID
+JOIN Gold_ModelVersions mm ON mm.ModelVersionID = pp.MarginModelVersionID
+WHERE m.MatchStatus = 'Scheduled'
+  AND pp.DataQualityStatus <> 'Critical';
+GO
+
+CREATE OR ALTER VIEW vw_Gold_ProductionHistoricalPredictions AS
+SELECT
+    pe.PredictionEvaluationID,
+    pe.MatchID,
+    pe.EvaluationSeason AS Season,
+    pe.RoundName AS Round,
+    pe.HomeTeamID,
+    ht.TeamName AS HomeTeam,
+    pe.AwayTeamID,
+    at.TeamName AS AwayTeam,
+    pe.HomeScore,
+    pe.AwayScore,
+    pe.ActualOutcome,
+    pe.PredictedOutcome,
+    pe.CorrectWinner,
+    pe.HomeProbabilityError,
+    pe.MarginError AS PredictedMarginError,
+    pe.AbsoluteMarginError,
+    pe.HomeProbabilityBrier,
+    pe.MulticlassBrier,
+    pe.LogLoss,
+    mv.ModelName,
+    mv.ModelVersion,
+    pe.EvaluationName,
+    pe.FeatureCutoffDate,
+    pe.EvaluatedAt
+FROM Gold_PredictionEvaluations pe
+JOIN Gold_ModelVersions mv ON mv.ModelVersionID = pe.ModelVersionID
+JOIN Silver_Teams ht ON ht.TeamID = pe.HomeTeamID
+JOIN Silver_Teams at ON at.TeamID = pe.AwayTeamID;
+GO
+
+CREATE OR ALTER VIEW vw_Gold_ProductionMatchExplanation AS
+SELECT
+    pp.ProductionPredictionID,
+    pp.MatchID,
+    ht.TeamName AS HomeTeam,
+    at.TeamName AS AwayTeam,
+    pp.HomePreMatchElo,
+    pp.AwayPreMatchElo,
+    pp.RawEloDifference,
+    pp.HomeAdvantageAdjustment,
+    pp.AdjustedEloDifference,
+    pp.ProbabilityContribution,
+    pp.HomeWinProbability,
+    pp.DrawProbability,
+    pp.AwayWinProbability,
+    pp.PredictedHomeMargin,
+    pp.ConfidenceLevel,
+    pp.HomeRollingMargin AS ContextHomeRollingMargin,
+    pp.AwayRollingMargin AS ContextAwayRollingMargin,
+    pp.RestDaysDiff AS ContextRestDaysDiff,
+    pp.HeadToHeadContext AS ContextHeadToHeadMargin,
+    pp.HomeTeamSheetAvailable AS ContextHomeTeamSheetAvailable,
+    pp.AwayTeamSheetAvailable AS ContextAwayTeamSheetAvailable,
+    CAST(
+        CONCAT(
+            'Used by Elo model: home Elo ', COALESCE(CAST(pp.HomePreMatchElo AS VARCHAR(30)), 'unknown'),
+            ', away Elo ', COALESCE(CAST(pp.AwayPreMatchElo AS VARCHAR(30)), 'unknown'),
+            ', home advantage ', COALESCE(CAST(pp.HomeAdvantageAdjustment AS VARCHAR(30)), 'unknown'),
+            ', adjusted Elo difference ', COALESCE(CAST(pp.AdjustedEloDifference AS VARCHAR(30)), 'unknown'),
+            '. Context only: recent margins, rest days, head-to-head and team sheets are shown but were not used by EloOnlyBaseline.'
+        ) AS VARCHAR(1000)
+    ) AS ExplanationSummary
+FROM Gold_ProductionPredictions pp
+JOIN Silver_Matches m ON m.MatchID = pp.MatchID
+JOIN Silver_Teams ht ON ht.TeamID = m.HomeTeamID
+JOIN Silver_Teams at ON at.TeamID = m.AwayTeamID;
+GO
+
+CREATE OR ALTER VIEW vw_Gold_ProductionModelSummary AS
+SELECT
+    ds.ModelDeploymentStatusID,
+    ds.TargetType,
+    mv.ModelVersionID,
+    mv.ModelName,
+    mv.ModelVersion,
+    ds.DeploymentStatus,
+    ds.IsActive,
+    ds.EffectiveFrom,
+    ds.EffectiveTo,
+    ds.SelectedAt,
+    ds.SelectionReason,
+    ds.EvaluationEvidence
+FROM Gold_ModelDeploymentStatus ds
+JOIN Gold_ModelVersions mv ON mv.ModelVersionID = ds.ModelVersionID;
+GO
+
+CREATE OR ALTER VIEW vw_Gold_ProductionCalibration AS
+SELECT *
+FROM vw_Gold_ModelCalibration;
+GO
+
+CREATE OR ALTER VIEW vw_Gold_ProductionDataQuality AS
+SELECT
+    ProductionDataQualityIssueID,
+    MatchID,
+    Season,
+    SourceSystem,
+    ProcessName,
+    IssueCode,
+    Severity,
+    IssueMessage,
+    IsBlocking,
+    DetectedAt
+FROM Gold_ProductionDataQualityIssues;
+GO
+
+CREATE OR ALTER VIEW vw_Gold_ProductionPipelineRuns AS
+SELECT
+    PipelineRunID,
+    ProcessName,
+    StartedAt,
+    CompletedAt,
+    Status,
+    RecordsRead,
+    RecordsWritten,
+    WarningCount,
+    ErrorCount,
+    ModelVersion,
+    ErrorSummary
+FROM Gold_PipelineRuns;
+GO
+
 PRINT 'Gold model evaluation views ready.';
 GO

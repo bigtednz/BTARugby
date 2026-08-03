@@ -14,6 +14,10 @@ BEGIN TRANSACTION;
 
 -- Gold
 DELETE FROM Gold_CombinedForwardPredictions;
+DELETE FROM Gold_ProductionDataQualityIssues;
+DELETE FROM Gold_ProductionPredictions;
+DELETE FROM Gold_PipelineRuns;
+DELETE FROM Gold_ModelDeploymentStatus;
 DELETE FROM Gold_MarginModelChampionStatus;
 DELETE FROM Gold_PredictionFeatureContributions;
 DELETE FROM Gold_RidgeModelParameters;
@@ -50,6 +54,10 @@ GO
 -- Reset identities where present.
 DBCC CHECKIDENT ('Gold_BacktestResults', RESEED, 0);
 DBCC CHECKIDENT ('Gold_CombinedForwardPredictions', RESEED, 0);
+DBCC CHECKIDENT ('Gold_ProductionDataQualityIssues', RESEED, 0);
+DBCC CHECKIDENT ('Gold_ProductionPredictions', RESEED, 0);
+DBCC CHECKIDENT ('Gold_PipelineRuns', RESEED, 0);
+DBCC CHECKIDENT ('Gold_ModelDeploymentStatus', RESEED, 0);
 DBCC CHECKIDENT ('Gold_MarginModelChampionStatus', RESEED, 0);
 DBCC CHECKIDENT ('Gold_ModelCalibration', RESEED, 0);
 DBCC CHECKIDENT ('Gold_PredictionEvaluations', RESEED, 0);

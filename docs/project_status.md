@@ -175,6 +175,45 @@ The current competition focus is Hilux NPC.
 
 Champion decision: `Rejected`. Across complete seasons 2023-2025, ridge weighted margin MAE was 13.56 versus 12.81 for `EloOnlyBaseline v0.2.0`, and ridge beat Elo-only in zero of the three complete seasons.
 
+### Production Predictions and Reporting Layer v0.4
+
+- Added `analytics/run_production_predictions.py`.
+- Added production champion registry table `Gold_ModelDeploymentStatus`.
+- Registered:
+  - `EloOnlyBaseline v0.2.0` as active champion for win probability
+  - `EloOnlyBaseline v0.2.0` as active margin incumbent
+  - `RidgeMarginModel v0.3.0` as rejected for margin
+- Added production prediction storage:
+  - `Gold_ProductionPredictions`
+  - `Gold_ProductionDataQualityIssues`
+  - `Gold_PipelineRuns`
+- Added production reporting views:
+  - `vw_Gold_ProductionUpcomingPredictions`
+  - `vw_Gold_ProductionHistoricalPredictions`
+  - `vw_Gold_ProductionMatchExplanation`
+  - `vw_Gold_ProductionModelSummary`
+  - `vw_Gold_ProductionCalibration`
+  - `vw_Gold_ProductionDataQuality`
+  - `vw_Gold_ProductionPipelineRuns`
+- Added confidence levels:
+  - Low: below 0.60
+  - Moderate: 0.60 to below 0.70
+  - High: 0.70 to below 0.80
+  - Very High: 0.80 and above
+- Added production data-quality checks for champion registry, scheduled-match eligibility, feature cutoff leakage, invalid probabilities, duplicate predictions, suspicious scheduled 0-0 placeholders, missing team sheets and insufficient prior history.
+- Added `docs/powerbi_reporting_guide.md`.
+- Added offline tests in `tests/test_production_predictions.py`.
+
+Current production run:
+
+- Season: 2026
+- Eligible scheduled fixtures: 63
+- Production predictions written: 63
+- Excluded/skipped fixtures: 0
+- Critical data-quality issues: 0
+- Warnings: 63 missing team sheets
+- Information: 63 scheduled 0-0 placeholders
+
 ### Data Reset and Repeatability
 
 - Added `database/reset_data.sql` to clear Bronze/Silver/Gold and NPC scraper tables for clean reloads.
@@ -214,6 +253,9 @@ Champion decision: `Rejected`. Across complete seasons 2023-2025, ridge weighted
 | Ridge v0.3 detailed evaluation rows | 238 |
 | Ridge v0.3 parameter rows | 88 |
 | Ridge v0.3 contribution rows | 6,622 |
+| Production predictions | 63 |
+| Production champion registry rows | 3 |
+| Production pipeline runs | 2 |
 
 ### Baseline Backtest
 
@@ -257,6 +299,7 @@ Across 2023-2025 completed seasons, `EloOnlyBaseline v0.2.0` is currently the st
 - Player stats are leaderboard rows only; full player event stats are not yet available.
 - Team sheets are available for only some matches.
 - `RidgeMarginModel v0.3.0` did not improve the current margin benchmark, so combined forward predictions are not promoted.
+- Future 2026 team sheets are not available yet, so current production predictions carry warning status until squads are published.
 - No injury, weather, travel, betting market, or squad announcement source is integrated yet.
 - The baseline models are intentionally simple; calibration rows now exist, but no probability recalibration has been fitted yet.
 
@@ -268,6 +311,7 @@ Across 2023-2025 completed seasons, `EloOnlyBaseline v0.2.0` is currently the st
 - Improve margin features before running another champion challenge.
 - Review why ridge underperformed Elo-only, especially sparse team-sheet continuity and negative point-trend coefficients.
 - Add model comparison notes for which baseline remains the benchmark to beat.
+- Build the first Power BI report from `docs/powerbi_reporting_guide.md`.
 
 ### Modelling
 
@@ -275,6 +319,7 @@ Across 2023-2025 completed seasons, `EloOnlyBaseline v0.2.0` is currently the st
 - Add a second margin challenger only after better explanatory data is available.
 - Add backtest split controls by season and round.
 - Add probability recalibration or logistic regression without replacing Elo-only until backtests justify it.
+- Add a controlled champion-retirement workflow when a replacement model eventually beats Elo-only.
 
 ### Data
 

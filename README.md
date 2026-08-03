@@ -42,6 +42,7 @@ Run these scripts in order against SQL Server:
 6. `database/model_evaluation_views.sql`
 7. `analytics/baseline_evaluation.py`
 8. `analytics/ridge_margin_model.py`
+9. `analytics/run_production_predictions.py`
 
 The database name is currently:
 
@@ -124,6 +125,37 @@ Additional v0.3 views:
 - `vw_Gold_MarginModelComparison`
 - `vw_Gold_MarginChampionStatus`
 - `vw_Gold_CombinedUpcomingPredictions`
+
+## Production Predictions v0.4
+
+`analytics/run_production_predictions.py` registers the active production model registry and writes Power BI-ready upcoming predictions.
+
+Current production decision:
+
+- `EloOnlyBaseline v0.2.0` is active champion for win probability.
+- `EloOnlyBaseline v0.2.0` is the active margin incumbent.
+- `RidgeMarginModel v0.3.0` remains rejected for margin.
+
+Run production predictions:
+
+```powershell
+D:\Cursor\BTA_Rugby\.venv\Scripts\python.exe analytics\run_production_predictions.py --dry-run --season 2026
+D:\Cursor\BTA_Rugby\.venv\Scripts\python.exe analytics\run_production_predictions.py --season 2026
+```
+
+Use `--replace` to intentionally replace existing production predictions for the same match and champion model versions. Use `--match-id <id>` to regenerate one fixture.
+
+Production reporting views:
+
+- `vw_Gold_ProductionUpcomingPredictions`
+- `vw_Gold_ProductionHistoricalPredictions`
+- `vw_Gold_ProductionMatchExplanation`
+- `vw_Gold_ProductionModelSummary`
+- `vw_Gold_ProductionCalibration`
+- `vw_Gold_ProductionDataQuality`
+- `vw_Gold_ProductionPipelineRuns`
+
+Power BI build notes are in [docs/powerbi_reporting_guide.md](docs/powerbi_reporting_guide.md).
 
 ## Near-Term Roadmap
 
