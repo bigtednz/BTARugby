@@ -39,7 +39,8 @@ Run these scripts in order against SQL Server:
 3. `rugbypass_scraper/rugbypass_scraper/scraper.py`
 4. `database/load_npc_to_silver.sql`
 5. `database/gold_feature_views.sql`
-6. `analytics/run_baseline_predictions.py`
+6. `database/model_evaluation_views.sql`
+7. `analytics/baseline_evaluation.py`
 
 The database name is currently:
 
@@ -57,21 +58,52 @@ RugbyAnalytics
 
 ## Current Baseline Model
 
-`analytics/run_baseline_predictions.py` writes an explainable Elo plus rolling-margin baseline to:
+`analytics/baseline_evaluation.py` writes transparent benchmark model predictions, walk-forward backtests, and calibration rows to:
 
 - `Gold_ModelVersions`
 - `Gold_MatchPredictions`
 - `Gold_BacktestResults`
+- `Gold_PredictionEvaluations`
+- `Gold_ModelCalibration`
 
-Current baseline version:
+Current baseline release:
 
 ```text
-EloRollingMarginBaseline v0.1.0
+Baseline Evaluation v0.2
 ```
+
+Run all benchmark models:
+
+```powershell
+python analytics/baseline_evaluation.py --model all --evaluation-season all
+```
+
+Run one model:
+
+```powershell
+python analytics/baseline_evaluation.py --model EloOnlyBaseline --evaluation-season all
+```
+
+Run one evaluation season:
+
+```powershell
+python analytics/baseline_evaluation.py --model all --evaluation-season 2025
+```
+
+Use `--dry-run` to calculate without writes and `--replace` to replace stored results for the same model/version/evaluation window.
+
+Walk-forward evaluation uses seasons before 2023 to evaluate 2023, seasons through 2023 to evaluate 2024, seasons through 2024 to evaluate 2025, and seasons through 2025 to evaluate completed 2026 matches. Draws are included in probability metrics and margin metrics; winner accuracy excludes draws.
+
+Current comparison views:
+
+- `vw_Gold_ModelPerformanceComparison`
+- `vw_Gold_ModelCalibration`
+- `vw_Gold_ModelPerformanceByTeam`
+- `vw_Gold_ModelPerformanceByRoundBand`
 
 ## Near-Term Roadmap
 
-1. Add confidence-band calibration and model comparison views.
-2. Build logistic/ridge feature models against the Gold feature matrix.
-3. Add richer source data for team totals, events, and injuries when available.
-4. Surface predictions and explanations in a dashboard/API.
+1. Build logistic/ridge feature models against the Gold feature matrix.
+2. Add richer source data for team totals, events, and injuries when available.
+3. Surface predictions and explanations in a dashboard/API.
+4. Add run logs and CI checks around evaluation scripts.

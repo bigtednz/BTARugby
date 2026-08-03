@@ -82,6 +82,12 @@ Models:
 - season points differential baseline
 - Elo rating model implemented as `EloRollingMarginBaseline v0.1.0`
 - rolling margin model implemented as part of `EloRollingMarginBaseline v0.1.0`
+- Baseline Evaluation v0.2 benchmark set:
+  - `HomeTeamBaseline v0.2.0`
+  - `EloOnlyBaseline v0.2.0`
+  - `RollingMarginOnlyBaseline v0.2.0`
+  - `SeasonToDateMarginBaseline v0.2.0`
+  - `EloRollingMarginBaseline v0.2.0`
 
 Targets:
 - win probability
@@ -113,8 +119,26 @@ Metrics:
 Current baseline metrics are stored in `Gold_BacktestResults` after running:
 
 ```powershell
-python analytics/run_baseline_predictions.py
+python analytics/baseline_evaluation.py --model all --evaluation-season all
 ```
+
+Walk-forward evaluation is season based:
+- train with seasons before 2023, evaluate 2023
+- train with seasons through 2023, evaluate 2024
+- train with seasons through 2024, evaluate 2025
+- train with seasons through 2025, evaluate completed 2026 matches
+
+Draw treatment:
+- probability metrics include draws
+- multiclass Brier and log loss use home/draw/away probabilities
+- winner accuracy excludes drawn matches
+- margin metrics include draws
+
+Current reporting views:
+- `vw_Gold_ModelPerformanceComparison`
+- `vw_Gold_ModelCalibration`
+- `vw_Gold_ModelPerformanceByTeam`
+- `vw_Gold_ModelPerformanceByRoundBand`
 
 ## Platform Surfaces
 

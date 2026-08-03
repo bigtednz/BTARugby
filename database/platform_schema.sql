@@ -226,6 +226,67 @@ CREATE TABLE Gold_BacktestResults (
 );
 GO
 
+IF COL_LENGTH('Gold_BacktestResults', 'EvaluationName') IS NULL
+ALTER TABLE Gold_BacktestResults ADD EvaluationName VARCHAR(100) NULL;
+GO
+
+IF COL_LENGTH('Gold_BacktestResults', 'EvaluationSeason') IS NULL
+ALTER TABLE Gold_BacktestResults ADD EvaluationSeason INT NULL;
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Gold_PredictionEvaluations')
+CREATE TABLE Gold_PredictionEvaluations (
+    PredictionEvaluationID BIGINT IDENTITY PRIMARY KEY,
+    PredictionID           BIGINT NOT NULL REFERENCES Gold_MatchPredictions(PredictionID),
+    ModelVersionID         INT NOT NULL REFERENCES Gold_ModelVersions(ModelVersionID),
+    MatchID                INT NOT NULL REFERENCES Silver_Matches(MatchID),
+    EvaluationName         VARCHAR(100) NOT NULL,
+    EvaluationSeason       INT NOT NULL,
+    FeatureCutoffDate      DATE NULL,
+    HomeTeamID             INT NOT NULL REFERENCES Silver_Teams(TeamID),
+    AwayTeamID             INT NOT NULL REFERENCES Silver_Teams(TeamID),
+    RoundName              VARCHAR(50) NULL,
+    RoundBand              VARCHAR(20) NULL,
+    HomeScore              INT NOT NULL,
+    AwayScore              INT NOT NULL,
+    ActualHomeResult       DECIMAL(9,6) NOT NULL,
+    ActualOutcome          CHAR(1) NOT NULL,
+    PredictedOutcome       CHAR(1) NOT NULL,
+    CorrectWinner          BIT NULL,
+    MarginError            DECIMAL(12,6) NULL,
+    AbsoluteMarginError    DECIMAL(12,6) NULL,
+    SquaredMarginError     DECIMAL(18,6) NULL,
+    HomeProbabilityError   DECIMAL(12,6) NULL,
+    HomeProbabilityBrier   DECIMAL(18,6) NULL,
+    MulticlassBrier        DECIMAL(18,6) NULL,
+    LogLoss                DECIMAL(18,6) NULL,
+    EvaluatedAt            DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT UQ_Gold_PredictionEvaluations UNIQUE (PredictionID, EvaluationName)
+);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Gold_ModelCalibration')
+CREATE TABLE Gold_ModelCalibration (
+    ModelCalibrationID       BIGINT IDENTITY PRIMARY KEY,
+    ModelVersionID           INT NOT NULL REFERENCES Gold_ModelVersions(ModelVersionID),
+    EvaluationName           VARCHAR(100) NOT NULL,
+    EvaluationSeason         INT NOT NULL,
+    ConfidenceBand           VARCHAR(20) NOT NULL,
+    BandStart                DECIMAL(4,2) NOT NULL,
+    BandEnd                  DECIMAL(4,2) NOT NULL,
+    PredictionCount          INT NOT NULL,
+    MeanHomeWinProbability   DECIMAL(9,6) NULL,
+    ActualHomeWinRate        DECIMAL(9,6) NULL,
+    CalibrationGap           DECIMAL(9,6) NULL,
+    WinnerAccuracy           DECIMAL(9,6) NULL,
+    MeanAbsoluteMarginError  DECIMAL(12,6) NULL,
+    CreatedAt                DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT UQ_Gold_ModelCalibration UNIQUE (
+        ModelVersionID, EvaluationName, EvaluationSeason, ConfidenceBand
+    )
+);
+GO
+
 -- ============================================================
 -- Silver load helpers from current NPC scraper tables
 -- ============================================================

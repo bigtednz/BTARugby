@@ -116,6 +116,31 @@ The current competition focus is Hilux NPC.
   - predicted away score
   - predicted margin
 
+### Baseline Evaluation v0.2
+
+- Added `analytics/baseline_evaluation.py`.
+- Added offline tests in `tests/test_baseline_evaluation.py`.
+- Added model evaluation SQL views in `database/model_evaluation_views.sql`.
+- Added Gold evaluation tables:
+  - `Gold_PredictionEvaluations`
+  - `Gold_ModelCalibration`
+- Extended `Gold_BacktestResults` with:
+  - `EvaluationName`
+  - `EvaluationSeason`
+- Implemented benchmark models:
+  - `HomeTeamBaseline v0.2.0`
+  - `EloOnlyBaseline v0.2.0`
+  - `RollingMarginOnlyBaseline v0.2.0`
+  - `SeasonToDateMarginBaseline v0.2.0`
+  - `EloRollingMarginBaseline v0.2.0`
+- Added walk-forward evaluation by season:
+  - seasons before 2023 evaluate 2023
+  - seasons through 2023 evaluate 2024
+  - seasons through 2024 evaluate 2025
+  - seasons through 2025 evaluate completed 2026 matches
+- Added confidence-band calibration in 0.10 home-win-probability bands.
+- Added data-quality checks for duplicate predictions, invalid probabilities, scheduled matches in evaluation, feature cutoff leakage, missing scores, suspicious completed `0-0` rows, and small samples.
+
 ### Data Reset and Repeatability
 
 - Added `database/reset_data.sql` to clear Bronze/Silver/Gold and NPC scraper tables for clean reloads.
@@ -148,7 +173,9 @@ The current competition focus is Hilux NPC.
 | Item | Count |
 | --- | ---: |
 | Match feature rows | 391 |
-| Predictions | 454 |
+| Predictions | 1,959 |
+| Detailed v0.2 evaluation rows | 1,190 |
+| v0.2 calibration rows | 126 |
 
 ### Baseline Backtest
 
@@ -163,6 +190,17 @@ The current competition focus is Hilux NPC.
 | Margin RMSE | 16.42 |
 | Home probability Brier | 0.207 |
 
+### Baseline Evaluation v0.2 Best Current Benchmark
+
+Across 2023-2025 completed seasons, `EloOnlyBaseline v0.2.0` is currently the strongest simple benchmark by winner accuracy and probability metrics.
+
+| Season | Winner Accuracy | Margin MAE |
+| --- | ---: | ---: |
+| 2023 | 71.05% | 11.31 |
+| 2024 | 70.13% | 12.97 |
+| 2025 | 69.74% | 14.15 |
+| 2026 completed | 85.71% | 13.75 |
+
 ## Current Limitations
 
 - RugbyPass does not currently return NPC archive fixtures for 2020 through the tested archive endpoint.
@@ -170,22 +208,15 @@ The current competition focus is Hilux NPC.
 - Player stats are leaderboard rows only; full player event stats are not yet available.
 - Team sheets are available for only some matches.
 - No injury, weather, travel, betting market, or squad announcement source is integrated yet.
-- The baseline model is intentionally simple and not calibrated by confidence band yet.
+- The baseline models are intentionally simple; calibration rows now exist, but no probability recalibration has been fitted yet.
 
 ## Todo List
 
 ### Next
 
-- Add model calibration and comparison views:
-  - accuracy by confidence bucket
-  - Brier score by season
-  - margin error by season
-  - home/away calibration
-- Add benchmark models:
-  - home-team baseline
-  - season-to-date margin baseline
-  - rolling-margin-only baseline
-- Compare all baseline models in a single Gold view.
+- Review v0.2 calibration gaps and decide whether to add probability recalibration.
+- Build logistic/ridge feature models against `vw_Gold_MatchFeatureMatrix`.
+- Add model comparison notes for which baseline becomes the benchmark to beat.
 
 ### Modelling
 
