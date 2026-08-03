@@ -10,7 +10,7 @@ The project is being built in layers:
 | Silver | Normalise competitions, teams, players, matches, and stats |
 | Gold | Build model-ready features, predictions, and backtests |
 
-See [docs/platform_blueprint.md](docs/platform_blueprint.md) for the full platform direction.
+See [docs/platform_blueprint.md](docs/platform_blueprint.md) for the full platform direction and [docs/project_status.md](docs/project_status.md) for completed work and the current todo list.
 
 ## Current Ingestion
 

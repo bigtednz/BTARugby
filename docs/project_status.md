@@ -1,0 +1,235 @@
+# BTA Rugby Analytics Project Status
+
+Last updated: 2026-08-03
+
+## Current Objective
+
+Build a rugby analytics platform that ingests historical rugby data, normalises it into Bronze/Silver/Gold layers, detects trends, and produces explainable match predictions.
+
+The current competition focus is Hilux NPC.
+
+## Completed Work
+
+### Repository and Project Setup
+
+- Created the BTA Rugby Analytics repository structure.
+- Connected the local project to GitHub at `bigtednz/BTARugby`.
+- Added platform documentation in `README.md` and `docs/platform_blueprint.md`.
+- Added SQL Server database scripts under `database/`.
+
+### Competition Conversion
+
+- Converted the RugbyPass scraper from its original target to Hilux NPC.
+- Set RugbyPass tournament URI to `bunnings-npc`.
+- Added NPC-specific table naming:
+  - `NPC_Matches`
+  - `NPC_TeamStats`
+  - `NPC_PlayerStats`
+  - `NPC_PlayerAppearances`
+
+### Bronze Layer
+
+- Added `Bronze_SourceSnapshots`.
+- Captures raw RugbyPass HTML/JSON snapshots for:
+  - fixtures
+  - team stats pages
+  - player stats pages
+  - team sheets
+- Uses content hashes so raw source evidence can be audited and reprocessed later.
+
+### Silver Layer
+
+- Added normalised tables for:
+  - competitions
+  - seasons
+  - teams
+  - players
+  - venues
+  - matches
+  - team match stats
+  - player leaderboard stats
+  - player appearances
+- Added `database/load_npc_to_silver.sql` to load NPC scraper tables into Silver.
+- Fixed future fixture handling so future `0-0` fixtures are marked `Scheduled`, not `Completed`.
+
+### Player Data
+
+- Identified that RugbyPass match stats pages expose player leaderboard rows, not full squads.
+- Kept leaderboard stats in `NPC_PlayerStats`.
+- Added `NPC_PlayerAppearances` for full team-sheet appearances.
+- Added `Silver_PlayerAppearances`.
+- Confirmed Richie Mo'unga appears correctly for Canterbury:
+  - match `950772`
+  - jersey `22`
+  - substitute
+  - sub on at `51`
+
+### Historical Data Load
+
+- Added historical fixture loading through RugbyPass archive POST endpoint.
+- Added `NPC_TARGET_SEASONS` so a specific season can be loaded repeatably.
+- Confirmed RugbyPass archive currently exposes NPC data from 2021 onward.
+- Confirmed the RugbyPass 2020 archive request returns no NPC games.
+- Loaded available NPC seasons:
+  - 2021
+  - 2022
+  - 2023
+  - 2024
+  - 2025
+  - 2026 current fixtures/results
+
+### Gold Feature Layer
+
+- Added `database/gold_feature_views.sql`.
+- Implemented:
+  - `vw_Gold_TeamMatchBase`
+  - `vw_Gold_TeamFormFeatures`
+  - `vw_Gold_HeadToHeadFeatures`
+  - `vw_Gold_TeamSheetFeatures`
+  - `vw_Gold_MatchFeatureMatrix`
+- Current feature matrix includes:
+  - rolling 3 and rolling 5 form
+  - season-to-date result, margin, points for, points against
+  - rest days
+  - home/away venue form
+  - recent head-to-head form
+  - listed players, starters, substitutes
+  - returning players and returning starters
+
+### Baseline Prediction Model
+
+- Added `analytics/run_baseline_predictions.py`.
+- Implemented `EloRollingMarginBaseline v0.1.0`.
+- Writes to:
+  - `Gold_ModelVersions`
+  - `Gold_MatchPredictions`
+  - `Gold_BacktestResults`
+- Model combines:
+  - Elo rating difference
+  - fixed home advantage
+  - rolling five-match margin difference
+- Produces:
+  - home win probability
+  - away win probability
+  - draw probability
+  - predicted home score
+  - predicted away score
+  - predicted margin
+
+### Data Reset and Repeatability
+
+- Added `database/reset_data.sql` to clear Bronze/Silver/Gold and NPC scraper tables for clean reloads.
+- Scraper and SQL loads are mostly idempotent via `MERGE` and uniqueness constraints.
+
+## Current Database State
+
+### NPC Matches
+
+| Season | Matches |
+| --- | ---: |
+| 2021 | 76 |
+| 2022 | 77 |
+| 2023 | 77 |
+| 2024 | 77 |
+| 2025 | 77 |
+| 2026 | 70 |
+
+### Silver
+
+| Item | Count |
+| --- | ---: |
+| Completed matches | 391 |
+| Scheduled matches | 63 |
+| Silver players | 929 |
+| Silver player appearances | 6,348 |
+
+### Gold
+
+| Item | Count |
+| --- | ---: |
+| Match feature rows | 391 |
+| Predictions | 454 |
+
+### Baseline Backtest
+
+`EloRollingMarginBaseline v0.1.0`
+
+| Metric | Value |
+| --- | ---: |
+| Matches evaluated | 391 |
+| Non-draw matches evaluated | 365 |
+| Winner accuracy | 69.04% |
+| Margin MAE | 12.23 |
+| Margin RMSE | 16.42 |
+| Home probability Brier | 0.207 |
+
+## Current Limitations
+
+- RugbyPass does not currently return NPC archive fixtures for 2020 through the tested archive endpoint.
+- Team totals are sparse because NPC RugbyPass pages often do not expose true team-total stat JSON.
+- Player stats are leaderboard rows only; full player event stats are not yet available.
+- Team sheets are available for only some matches.
+- No injury, weather, travel, betting market, or squad announcement source is integrated yet.
+- The baseline model is intentionally simple and not calibrated by confidence band yet.
+
+## Todo List
+
+### Next
+
+- Add model calibration and comparison views:
+  - accuracy by confidence bucket
+  - Brier score by season
+  - margin error by season
+  - home/away calibration
+- Add benchmark models:
+  - home-team baseline
+  - season-to-date margin baseline
+  - rolling-margin-only baseline
+- Compare all baseline models in a single Gold view.
+
+### Modelling
+
+- Add logistic regression for home win probability using `vw_Gold_MatchFeatureMatrix`.
+- Add ridge or linear regression for predicted margin.
+- Add model versioning for feature model parameters.
+- Add backtest split controls by season and round.
+- Add prediction explanation output showing the strongest feature drivers.
+
+### Data
+
+- Investigate other sources for 2020 NPC results.
+- Add richer team totals if a reliable source is found.
+- Add match event data:
+  - tries
+  - cards
+  - substitutions
+  - scoring timeline
+- Add team availability inputs:
+  - squad announcements
+  - injuries
+  - suspensions
+  - returning All Blacks or representative players
+- Add weather and venue conditions.
+
+### Platform
+
+- Add Power BI-ready reporting views.
+- Add dashboard/API layer for:
+  - upcoming match predictions
+  - team form
+  - head-to-head comparison
+  - model performance
+  - player continuity
+- Add a data quality monitor for missing snapshots, missing team sheets, and suspicious `0-0` rows.
+
+### Engineering
+
+- Move database connection settings to environment variables.
+- Add a lightweight test suite for parser and model functions.
+- Add command wrappers for the standard pipeline:
+  - scrape
+  - load Silver
+  - refresh Gold
+  - run predictions
+- Add run logs for model executions.
+- Add CI checks for Python compile and SQL script linting where practical.
