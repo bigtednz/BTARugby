@@ -1,6 +1,8 @@
 # RugbyPass Hilux NPC Scraper
 
-Pulls Hilux NPC match metadata and team stats from RugbyPass into a local SQL Server database.
+Pulls Hilux NPC match metadata and player leaderboard rows from RugbyPass into a local SQL Server database.
+
+This scraper is an ingestion component for the wider BTA Rugby Analytics platform. See `../../docs/platform_blueprint.md` for the bronze/silver/gold platform design.
 
 ## Quick Start
 
@@ -48,7 +50,7 @@ python scraper.py
 1. Opens the RugbyPass Hilux NPC fixtures page.
 2. Extracts game IDs and match metadata.
 3. Visits each match stats page.
-4. Parses home and away team stats.
+4. Parses player leaderboard rows into a separate player-stat table.
 5. Upserts into SQL Server so re-runs do not duplicate matches.
 
 ## Database Structure
@@ -56,7 +58,7 @@ python scraper.py
 | Table | Content |
 | --- | --- |
 | `NPC_Matches` | One row per match with teams, score, venue, and date |
-| `NPC_TeamStats` | Two rows per match, one per team |
+| `NPC_TeamStats` | Team totals only when RugbyPass exposes true team-stat JSON |
 | `NPC_PlayerStats` | Ranked player leaderboard rows from the RugbyPass match stats page |
 
 | View | Use |
@@ -65,6 +67,8 @@ python scraper.py
 | `vw_TeamPerformance` | Team-level match stats with derived metrics |
 
 For NPC, RugbyPass exposes player leaderboards on the match stats page. These rows are stored separately in `NPC_PlayerStats` so player rankings are not mixed into team totals.
+
+After scraping, run `../../database/load_npc_to_silver.sql` to load the current NPC data into the platform's normalised Silver tables.
 
 ## Stats Captured
 
