@@ -75,6 +75,22 @@ SELECT
 FROM vw_TeamPerformance
 WHERE Team = 'Canterbury' AND Season = 2026
 GROUP BY Result;
+
+-- Top player leaderboard rows by match
+SELECT
+    m.MatchDate,
+    m.HomeTeam,
+    m.AwayTeam,
+    ps.StatCategory,
+    ps.StatName,
+    ps.Rank,
+    ps.Team,
+    ps.PlayerName,
+    ps.StatValueRaw
+FROM NPC_PlayerStats ps
+JOIN NPC_Matches m ON ps.MatchID = m.MatchID
+WHERE m.Season = 2026
+ORDER BY m.MatchDate, ps.StatName, ps.Rank;
 GO
 
 PRINT 'Setup complete. Run scraper.py next.';

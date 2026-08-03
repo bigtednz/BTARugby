@@ -57,11 +57,14 @@ python scraper.py
 | --- | --- |
 | `NPC_Matches` | One row per match with teams, score, venue, and date |
 | `NPC_TeamStats` | Two rows per match, one per team |
+| `NPC_PlayerStats` | Ranked player leaderboard rows from the RugbyPass match stats page |
 
 | View | Use |
 | --- | --- |
 | `vw_MatchResults` | Match results with winner and margin |
 | `vw_TeamPerformance` | Team-level match stats with derived metrics |
+
+For NPC, RugbyPass exposes player leaderboards on the match stats page. These rows are stored separately in `NPC_PlayerStats` so player rankings are not mixed into team totals.
 
 ## Stats Captured
 

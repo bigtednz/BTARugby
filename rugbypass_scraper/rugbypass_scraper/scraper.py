@@ -32,15 +32,21 @@ BASE_URL         = "https://www.rugbypass.com"
 FIXTURES_URL     = f"{BASE_URL}/{TOURNAMENT_URI}/fixtures-results/"
 MATCHES_TABLE    = f"{COMPETITION_CODE}_Matches"
 STATS_TABLE      = f"{COMPETITION_CODE}_TeamStats"
+PLAYER_STATS_TABLE = f"{COMPETITION_CODE}_PlayerStats"
 MATCH_TEAM_UQ    = f"UQ_{COMPETITION_CODE}_MatchTeam"
+PLAYER_STAT_UQ   = f"UQ_{COMPETITION_CODE}_PlayerStat"
 MIN_GAME_ID      = 100_000
 MAX_GAME_ID      = 9_999_999
+TEAM_SLUG_OVERRIDES = {
+    "Tasman Mako": "tasman-makos",
+}
 
 SQL_CONNECTION_STRING = (
     "DRIVER={ODBC Driver 17 for SQL Server};"
     "SERVER=BIGTEDS;"
     "DATABASE=RugbyAnalytics;"
     "Trusted_Connection=yes;"
+    "Encrypt=no;"
     "TrustServerCertificate=yes;"
 )
 
@@ -49,6 +55,7 @@ REQUEST_TIMEOUT      = 30000  # ms
 HEADLESS             = True   # set False to watch the browser (useful for debugging)
 MAX_FAILURES_TO_SHOW = 5      # stop early so debugging is fast
 DEBUG_HTML_DIR       = "debug_html"
+PARSE_RENDERED_TEAM_STATS = False
 
 logging.basicConfig(
     level=logging.INFO,
@@ -136,6 +143,24 @@ CREATE TABLE {STATS_TABLE} (
 )
 """
 
+DDL_PLAYER_STATS = f"""
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = '{PLAYER_STATS_TABLE}')
+CREATE TABLE {PLAYER_STATS_TABLE} (
+    PlayerStatID   INT IDENTITY PRIMARY KEY,
+    MatchID        INT REFERENCES {MATCHES_TABLE}(MatchID),
+    Season         INT,
+    Team           VARCHAR(50),
+    PlayerName     VARCHAR(100),
+    StatCategory   VARCHAR(50),
+    StatName       VARCHAR(50),
+    Rank           INT,
+    StatValueRaw   VARCHAR(30),
+    StatValue      DECIMAL(10,2),
+    ScrapedAt      DATETIME DEFAULT GETDATE(),
+    CONSTRAINT {PLAYER_STAT_UQ} UNIQUE (MatchID, StatName, Team, PlayerName)
+)
+"""
+
 DDL_ALTER = f"""
 -- Widen KickToPassRatio so ratios above 9.9 don't overflow DECIMAL(5,4)
 IF EXISTS (
@@ -216,6 +241,12 @@ def safe_float(val):
     except Exception:
         return None
 
+def safe_decimal(val):
+    try:
+        return round(float(str(val).replace(',', '').strip()), 2)
+    except Exception:
+        return None
+
 def parse_ratio(val):
     """'1:4.3' → 4.3"""
     try:
@@ -228,6 +259,8 @@ def strip_html(content):
     return re.sub(r'\s+', ' ', text)
 
 def team_slug(name: str) -> str:
+    if name in TEAM_SLUG_OVERRIDES:
+        return TEAM_SLUG_OVERRIDES[name]
     """'Western Force' → 'western-force'"""
     slug = name.lower().replace(' ', '-').replace("'", '').replace('.', '')
     return re.sub(r'-+', '-', slug).strip('-')
@@ -360,6 +393,10 @@ def parse_match_from_dict(d: dict) -> dict | None:
         "round":      str(deep_get(d, 'round', 'roundName', 'roundNumber') or ''),
         "venue":      deep_get(d, 'venue', 'venueName', 'ground', 'stadium'),
     }
+
+def has_meaningful_stats(stats: dict) -> bool:
+    """True when the stats page yielded more than scoreboard-only data."""
+    return any(value is not None for value in stats.values())
 
 # ── FIXTURES HTML PARSER ──────────────────────────────────────────────────────
 def parse_fixtures_html(content: str) -> dict:
@@ -553,7 +590,11 @@ async def get_match_info(page, game_id, prefilled=None):
         url = f"{BASE_URL}/live/stats/?g={game_id}"
 
     log.info(f"  Loading stats page for metadata: {url}")
-    await page.goto(url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT)
+    response = await page.goto(url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT)
+    if response and response.status >= 500 and away_slug and home_slug:
+        url = f"{BASE_URL}/live/{away_slug}-vs-{home_slug}/stats/"
+        log.info(f"  Retrying stats URL without game ID: {url}")
+        await page.goto(url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT)
     await page.wait_for_timeout(3000)
     content = await page.content()
 
@@ -561,19 +602,16 @@ async def get_match_info(page, game_id, prefilled=None):
     next_data = parse_next_data(content)
     if next_data:
         candidates = find_all(next_data, is_match_dict)
-        # Prefer an exact game_id match; otherwise take the first candidate
+        # Only trust metadata from the requested game. RugbyPass fallback pages can
+        # contain unrelated fixtures in __NEXT_DATA__, and taking the first one
+        # pollutes the database with duplicate match metadata.
         for d in candidates:
             m_info = parse_match_from_dict(d)
             if m_info and m_info['game_id'] == game_id:
                 log.info(f"  Metadata from __NEXT_DATA__: "
                          f"{m_info['home_team']} vs {m_info['away_team']}")
                 return m_info
-        if candidates:
-            m_info = parse_match_from_dict(candidates[0])
-            if m_info:
-                log.info(f"  Metadata from __NEXT_DATA__ (first candidate): "
-                         f"{m_info['home_team']} vs {m_info['away_team']}")
-                return m_info
+        log.warning(f"  No exact metadata match found in __NEXT_DATA__ for game {game_id}")
 
     # ── Fallback: regex on raw HTML ────────────────────────────────────────────
     # These patterns use [\s\S]*? (DOTALL-safe) instead of [^}]+ to handle
@@ -802,7 +840,9 @@ async def get_match_stats(page, game_id, away_slug="", home_slug=""):
             log.info(f"  {len(stats)} stat values from API responses")
 
     # ── Tertiary: text parsing ─────────────────────────────────────────────────
-    if len(stats) < 10:
+    # NPC /stats/ pages expose player leaderboards, not team totals. Keep this
+    # disabled so player rankings are not written as team statistics.
+    if PARSE_RENDERED_TEAM_STATS and len(stats) < 10:
         log.info("  Falling back to rendered text parsing...")
         text = strip_html(content)
 
@@ -890,6 +930,92 @@ async def get_match_stats(page, game_id, away_slug="", home_slug=""):
 
     return stats
 
+async def get_player_stats(page, game_id, away_slug="", home_slug=""):
+    """
+    Scrape RugbyPass NPC player leaderboard rows from the match stats page.
+
+    These are not team totals. Each selected stat exposes ranked player rows:
+    rank, team logo alt text, player name, and stat value.
+    """
+    if away_slug and home_slug:
+        url = f"{BASE_URL}/live/{away_slug}-vs-{home_slug}/stats/?g={game_id}"
+    else:
+        url = f"{BASE_URL}/live/stats/?g={game_id}"
+
+    log.info(f"  Player stats URL: {url}")
+    response = await page.goto(url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT)
+    if response and response.status >= 500 and away_slug and home_slug:
+        url = f"{BASE_URL}/live/{away_slug}-vs-{home_slug}/stats/"
+        log.info(f"  Retrying player stats URL without game ID: {url}")
+        await page.goto(url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT)
+    await page.wait_for_timeout(3000)
+
+    stat_options = await page.evaluate("""
+        () => {
+            const filters = document.querySelector('.player-stats-container .filter.stats');
+            if (!filters) return [];
+            const options = [];
+            let category = '';
+            for (const el of filters.querySelectorAll('.title, .list-item')) {
+                const text = (el.innerText || '').trim();
+                if (!text) continue;
+                if (el.classList.contains('title')) {
+                    category = text.replace(/:$/, '');
+                } else if (!options.some(o => o.name === text)) {
+                    options.push({ category, name: text });
+                }
+            }
+            return options;
+        }
+    """)
+    stat_options = [
+        option for option in stat_options if option["category"] == "Top Stats"
+    ]
+
+    if not stat_options:
+        log.info("  No player leaderboard options found")
+        return []
+
+    leaderboard_groups = await page.locator(
+        ".player-stats-container .player"
+    ).evaluate_all("""
+            els => els.filter(row => row.offsetParent !== null).map(row => ({
+                rank: (row.querySelector('.num')?.innerText || '').trim(),
+                team: (row.querySelector('.logo img')?.alt || '').trim(),
+                player_name: (row.querySelector('.name')?.innerText || '').trim(),
+                value: (row.querySelector('.total')?.innerText || '').trim()
+            }))
+        """)
+
+    grouped_rows = []
+    current_group = []
+    for row in leaderboard_groups:
+        if row["rank"] == "1" and current_group:
+            grouped_rows.append(current_group)
+            current_group = []
+        current_group.append(row)
+    if current_group:
+        grouped_rows.append(current_group)
+
+    rows = []
+    for option, leaderboard_rows in zip(stat_options, grouped_rows):
+        for row in leaderboard_rows:
+            if not row["player_name"] or not row["value"]:
+                continue
+            rows.append({
+                "match_id": game_id,
+                "category": option["category"],
+                "stat_name": option["name"],
+                "rank": safe_int(row["rank"]),
+                "team": row["team"],
+                "player_name": row["player_name"],
+                "value_raw": row["value"],
+                "value": safe_decimal(row["value"]),
+            })
+
+    log.info(f"  Parsed {len(rows)} player stat rows")
+    return rows
+
 # ── STEP 4: WRITE TO SQL ──────────────────────────────────────────────────────
 def write_to_sql(conn, match_info, stats):
     cur = conn.cursor()
@@ -910,6 +1036,14 @@ def write_to_sql(conn, match_info, stats):
           match_info.get("away_team"),
           match_info.get("home_score"),
           match_info.get("away_score")))
+
+    if not has_meaningful_stats(stats):
+        conn.commit()
+        log.warning(
+            f"  {match_info.get('home_team')} vs {match_info.get('away_team')} "
+            "saved without team stats"
+        )
+        return
 
     for side in ("home", "away"):
         team = match_info.get(f"{side}_team")
@@ -994,6 +1128,45 @@ def write_to_sql(conn, match_info, stats):
     log.info(f"  ✓ {match_info.get('home_team')} vs {match_info.get('away_team')} — saved")
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
+def write_player_stats_to_sql(conn, player_stats):
+    if not player_stats:
+        return
+
+    cur = conn.cursor()
+    for row in player_stats:
+        cur.execute(f"""
+            MERGE {PLAYER_STATS_TABLE} AS t
+            USING (
+                SELECT ? AS MatchID, ? AS StatName, ? AS Team, ? AS PlayerName
+            ) AS s
+                ON t.MatchID = s.MatchID
+               AND t.StatName = s.StatName
+               AND t.Team = s.Team
+               AND t.PlayerName = s.PlayerName
+            WHEN MATCHED THEN UPDATE SET
+                Season=?,
+                StatCategory=?,
+                Rank=?,
+                StatValueRaw=?,
+                StatValue=?,
+                ScrapedAt=GETDATE()
+            WHEN NOT MATCHED THEN INSERT (
+                MatchID,Season,Team,PlayerName,StatCategory,StatName,Rank,
+                StatValueRaw,StatValue
+            ) VALUES (
+                ?,?,?,?,?,?,?,?,?
+            );
+        """, (
+            row["match_id"], row["stat_name"], row["team"], row["player_name"],
+            SEASON, row["category"], row["rank"], row["value_raw"], row["value"],
+            row["match_id"], SEASON, row["team"], row["player_name"],
+            row["category"], row["stat_name"], row["rank"], row["value_raw"],
+            row["value"],
+        ))
+
+    conn.commit()
+    log.info(f"  Saved {len(player_stats)} player stat rows")
+
 async def main():
     log.info(f"=== RugbyPass {COMPETITION_NAME} {SEASON} Scraper ===")
 
@@ -1003,6 +1176,7 @@ async def main():
         cur  = conn.cursor()
         cur.execute(DDL_MATCHES)
         cur.execute(DDL_STATS)
+        cur.execute(DDL_PLAYER_STATS)
         cur.execute(DDL_ALTER)
         cur.execute(DDL_VIEWS)
         cur.execute(DDL_VIEW2)
@@ -1041,9 +1215,9 @@ async def main():
             log.info(f"[{i}/{len(games)}] Game ID {game_id}")
             try:
                 cur.execute(
-                    f"SELECT COUNT(*) FROM {STATS_TABLE} WHERE MatchID = ?", game_id
+                    f"SELECT COUNT(*) FROM {PLAYER_STATS_TABLE} WHERE MatchID = ?", game_id
                 )
-                if cur.fetchone()[0] >= 2:
+                if cur.fetchone()[0] > 0:
                     log.info("  → Already in DB, skipping")
                     continue
 
@@ -1062,6 +1236,12 @@ async def main():
                     home_slug=match_info.get("home_slug", ""),
                 )
                 write_to_sql(conn, match_info, match_stats)
+                player_stats = await get_player_stats(
+                    page, game_id,
+                    away_slug=match_info.get("away_slug", ""),
+                    home_slug=match_info.get("home_slug", ""),
+                )
+                write_player_stats_to_sql(conn, player_stats)
                 success += 1
 
             except Exception as e:
