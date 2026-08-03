@@ -100,9 +100,11 @@ Use engineered features from Gold tables.
 
 Models:
 - logistic regression for win probability
-- linear or ridge regression for margin
+- `RidgeMarginModel v0.3.0` for margin, using fixed-alpha ridge regression and stored feature contributions
 - Poisson-style score model
 - gradient boosting after enough history is collected
+
+`RidgeMarginModel v0.3.0` keeps `EloOnlyBaseline v0.2.0` as the probability component. It was evaluated as a margin challenger across the same walk-forward seasons and was rejected for champion promotion because complete-season weighted MAE was worse than Elo-only.
 
 ### Phase 3: Backtesting and Calibration
 
@@ -139,6 +141,12 @@ Current reporting views:
 - `vw_Gold_ModelCalibration`
 - `vw_Gold_ModelPerformanceByTeam`
 - `vw_Gold_ModelPerformanceByRoundBand`
+- `vw_Gold_RidgeModelParameters`
+- `vw_Gold_RidgePredictionExplanation`
+- `vw_Gold_RidgeStrongestDrivers`
+- `vw_Gold_MarginModelComparison`
+- `vw_Gold_MarginChampionStatus`
+- `vw_Gold_CombinedUpcomingPredictions`
 
 ## Platform Surfaces
 
@@ -192,3 +200,4 @@ Candidate screens:
 5. Implement Elo and rolling margin baselines.
 6. Store predictions and backtest results.
 7. Build Power BI-ready views.
+8. Improve margin features before testing another margin champion.

@@ -141,6 +141,40 @@ The current competition focus is Hilux NPC.
 - Added confidence-band calibration in 0.10 home-win-probability bands.
 - Added data-quality checks for duplicate predictions, invalid probabilities, scheduled matches in evaluation, feature cutoff leakage, missing scores, suspicious completed `0-0` rows, and small samples.
 
+### Dedicated Margin Model v0.3
+
+- Added `analytics/ridge_margin_model.py`.
+- Registered `RidgeMarginModel v0.3.0`.
+- Retained `EloOnlyBaseline v0.2.0` as the probability component for home/draw/away probabilities.
+- Implemented fixed-alpha ridge regression for home margin using point-in-time features:
+  - pre-match Elo difference generated from model state before match update
+  - rolling 3 and rolling 5 margin difference
+  - season-to-date margin difference
+  - rolling points-for and points-against differences
+  - home/away form
+  - rest-day difference
+  - head-to-head margin
+  - returning-player and returning-starter continuity with missingness indicators
+- Added training-window-only standardisation and imputation.
+- Added explicit missingness indicators for sparse feature inputs.
+- Added stored ridge parameters and per-prediction feature contributions.
+- Added champion/challenger/rejected status storage.
+- Added offline unit tests in `tests/test_ridge_margin_model.py`.
+- Added Gold tables:
+  - `Gold_RidgeModelParameters`
+  - `Gold_PredictionFeatureContributions`
+  - `Gold_MarginModelChampionStatus`
+  - `Gold_CombinedForwardPredictions`
+- Added reporting views:
+  - `vw_Gold_RidgeModelParameters`
+  - `vw_Gold_RidgePredictionExplanation`
+  - `vw_Gold_RidgeStrongestDrivers`
+  - `vw_Gold_MarginModelComparison`
+  - `vw_Gold_MarginChampionStatus`
+  - `vw_Gold_CombinedUpcomingPredictions`
+
+Champion decision: `Rejected`. Across complete seasons 2023-2025, ridge weighted margin MAE was 13.56 versus 12.81 for `EloOnlyBaseline v0.2.0`, and ridge beat Elo-only in zero of the three complete seasons.
+
 ### Data Reset and Repeatability
 
 - Added `database/reset_data.sql` to clear Bronze/Silver/Gold and NPC scraper tables for clean reloads.
@@ -176,6 +210,10 @@ The current competition focus is Hilux NPC.
 | Predictions | 1,959 |
 | Detailed v0.2 evaluation rows | 1,190 |
 | v0.2 calibration rows | 126 |
+| Ridge v0.3 predictions | 301 |
+| Ridge v0.3 detailed evaluation rows | 238 |
+| Ridge v0.3 parameter rows | 88 |
+| Ridge v0.3 contribution rows | 6,622 |
 
 ### Baseline Backtest
 
@@ -201,12 +239,24 @@ Across 2023-2025 completed seasons, `EloOnlyBaseline v0.2.0` is currently the st
 | 2025 | 69.74% | 14.15 |
 | 2026 completed | 85.71% | 13.75 |
 
+### Dedicated Margin Model v0.3 Result
+
+`RidgeMarginModel v0.3.0` was evaluated as a margin challenger while retaining Elo-only probabilities.
+
+| Season | Matches Evaluated | Margin MAE | Margin RMSE | Median Abs Error | Bias | Within 15 | Large Error Rate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2023 | 77 | 12.32 | 15.21 | 10.50 | -1.39 | 66.23% | 33.77% |
+| 2024 | 77 | 13.24 | 18.23 | 9.59 | -2.26 | 70.13% | 29.87% |
+| 2025 | 77 | 15.12 | 18.78 | 13.44 | 2.49 | 58.44% | 41.56% |
+| 2026 completed | 7 | 12.06 | 12.92 | 13.92 | 3.17 | 71.43% | 28.57% |
+
 ## Current Limitations
 
 - RugbyPass does not currently return NPC archive fixtures for 2020 through the tested archive endpoint.
 - Team totals are sparse because NPC RugbyPass pages often do not expose true team-total stat JSON.
 - Player stats are leaderboard rows only; full player event stats are not yet available.
 - Team sheets are available for only some matches.
+- `RidgeMarginModel v0.3.0` did not improve the current margin benchmark, so combined forward predictions are not promoted.
 - No injury, weather, travel, betting market, or squad announcement source is integrated yet.
 - The baseline models are intentionally simple; calibration rows now exist, but no probability recalibration has been fitted yet.
 
@@ -215,16 +265,16 @@ Across 2023-2025 completed seasons, `EloOnlyBaseline v0.2.0` is currently the st
 ### Next
 
 - Review v0.2 calibration gaps and decide whether to add probability recalibration.
-- Build logistic/ridge feature models against `vw_Gold_MatchFeatureMatrix`.
-- Add model comparison notes for which baseline becomes the benchmark to beat.
+- Improve margin features before running another champion challenge.
+- Review why ridge underperformed Elo-only, especially sparse team-sheet continuity and negative point-trend coefficients.
+- Add model comparison notes for which baseline remains the benchmark to beat.
 
 ### Modelling
 
 - Add logistic regression for home win probability using `vw_Gold_MatchFeatureMatrix`.
-- Add ridge or linear regression for predicted margin.
-- Add model versioning for feature model parameters.
+- Add a second margin challenger only after better explanatory data is available.
 - Add backtest split controls by season and round.
-- Add prediction explanation output showing the strongest feature drivers.
+- Add probability recalibration or logistic regression without replacing Elo-only until backtests justify it.
 
 ### Data
 

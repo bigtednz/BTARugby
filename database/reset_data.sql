@@ -13,6 +13,10 @@ GO
 BEGIN TRANSACTION;
 
 -- Gold
+DELETE FROM Gold_CombinedForwardPredictions;
+DELETE FROM Gold_MarginModelChampionStatus;
+DELETE FROM Gold_PredictionFeatureContributions;
+DELETE FROM Gold_RidgeModelParameters;
 DELETE FROM Gold_ModelCalibration;
 DELETE FROM Gold_PredictionEvaluations;
 DELETE FROM Gold_BacktestResults;
@@ -45,9 +49,13 @@ GO
 
 -- Reset identities where present.
 DBCC CHECKIDENT ('Gold_BacktestResults', RESEED, 0);
+DBCC CHECKIDENT ('Gold_CombinedForwardPredictions', RESEED, 0);
+DBCC CHECKIDENT ('Gold_MarginModelChampionStatus', RESEED, 0);
 DBCC CHECKIDENT ('Gold_ModelCalibration', RESEED, 0);
 DBCC CHECKIDENT ('Gold_PredictionEvaluations', RESEED, 0);
+DBCC CHECKIDENT ('Gold_PredictionFeatureContributions', RESEED, 0);
 DBCC CHECKIDENT ('Gold_MatchPredictions', RESEED, 0);
+DBCC CHECKIDENT ('Gold_RidgeModelParameters', RESEED, 0);
 DBCC CHECKIDENT ('Gold_TeamMatchFeatures', RESEED, 0);
 DBCC CHECKIDENT ('Gold_ModelVersions', RESEED, 0);
 DBCC CHECKIDENT ('Silver_PlayerMatchStats', RESEED, 0);

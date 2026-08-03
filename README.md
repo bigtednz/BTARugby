@@ -41,6 +41,7 @@ Run these scripts in order against SQL Server:
 5. `database/gold_feature_views.sql`
 6. `database/model_evaluation_views.sql`
 7. `analytics/baseline_evaluation.py`
+8. `analytics/ridge_margin_model.py`
 
 The database name is currently:
 
@@ -101,9 +102,33 @@ Current comparison views:
 - `vw_Gold_ModelPerformanceByTeam`
 - `vw_Gold_ModelPerformanceByRoundBand`
 
+## Dedicated Margin Model
+
+`analytics/ridge_margin_model.py` implements `RidgeMarginModel v0.3.0`.
+
+It predicts home margin with fixed-alpha ridge regression while preserving `EloOnlyBaseline v0.2.0` probabilities for home/draw/away. Feature scaling and imputation are learned from the training window only, and each prediction stores an intercept row plus ranked feature contributions.
+
+Run the model:
+
+```powershell
+D:\Cursor\BTA_Rugby\.venv\Scripts\python.exe analytics\ridge_margin_model.py --replace
+```
+
+Current champion status: `Rejected` versus Elo-only for complete 2023-2025 margin performance. Ridge weighted MAE was 13.56 versus Elo-only 12.81, with zero of three complete seasons beaten.
+
+Additional v0.3 views:
+
+- `vw_Gold_RidgeModelParameters`
+- `vw_Gold_RidgePredictionExplanation`
+- `vw_Gold_RidgeStrongestDrivers`
+- `vw_Gold_MarginModelComparison`
+- `vw_Gold_MarginChampionStatus`
+- `vw_Gold_CombinedUpcomingPredictions`
+
 ## Near-Term Roadmap
 
-1. Build logistic/ridge feature models against the Gold feature matrix.
-2. Add richer source data for team totals, events, and injuries when available.
-3. Surface predictions and explanations in a dashboard/API.
-4. Add run logs and CI checks around evaluation scripts.
+1. Improve the margin feature set before another champion challenge.
+2. Review v0.2 probability calibration gaps before adding logistic models.
+3. Add richer source data for team totals, events, and injuries when available.
+4. Surface predictions and explanations in a dashboard/API.
+5. Add run logs and CI checks around evaluation scripts.

@@ -24,7 +24,14 @@ SELECT
     MAX(CASE WHEN br.MetricName = 'log_loss' THEN br.MetricValue END) AS LogLoss,
     MAX(CASE WHEN br.MetricName = 'margin_mae' THEN br.MetricValue END) AS MarginMAE,
     MAX(CASE WHEN br.MetricName = 'margin_rmse' THEN br.MetricValue END) AS MarginRMSE,
+    MAX(CASE WHEN br.MetricName = 'median_absolute_margin_error' THEN br.MetricValue END) AS MedianAbsoluteMarginError,
     MAX(CASE WHEN br.MetricName = 'mean_margin_error' THEN br.MetricValue END) AS MeanMarginError,
+    MAX(CASE WHEN br.MetricName = 'pct_within_5_points' THEN br.MetricValue END) AS PctWithin5Points,
+    MAX(CASE WHEN br.MetricName = 'pct_within_10_points' THEN br.MetricValue END) AS PctWithin10Points,
+    MAX(CASE WHEN br.MetricName = 'pct_within_15_points' THEN br.MetricValue END) AS PctWithin15Points,
+    MAX(CASE WHEN br.MetricName = 'p75_absolute_margin_error' THEN br.MetricValue END) AS P75AbsoluteMarginError,
+    MAX(CASE WHEN br.MetricName = 'p90_absolute_margin_error' THEN br.MetricValue END) AS P90AbsoluteMarginError,
+    MAX(CASE WHEN br.MetricName = 'large_error_rate' THEN br.MetricValue END) AS LargeErrorRate,
     MAX(CASE WHEN br.MetricName = 'actual_home_win_rate' THEN br.MetricValue END) AS ActualHomeWinRate,
     MAX(CASE WHEN br.MetricName = 'mean_predicted_home_win_probability' THEN br.MetricValue END) AS MeanPredictedHomeWinProbability
 FROM Gold_BacktestResults br
@@ -141,6 +148,140 @@ GROUP BY
     pe.EvaluationName,
     pe.EvaluationSeason,
     pe.RoundBand;
+GO
+
+CREATE OR ALTER VIEW vw_Gold_RidgeModelParameters AS
+SELECT
+    mv.ModelVersionID,
+    mv.ModelName,
+    mv.ModelVersion,
+    p.EvaluationName,
+    p.EvaluationSeason,
+    p.FeatureName,
+    p.Coefficient,
+    p.FeatureMean,
+    p.FeatureStdDev,
+    p.ImputationValue,
+    p.RidgeAlpha,
+    p.IsMissingnessIndicator,
+    p.CreatedAt
+FROM Gold_RidgeModelParameters p
+JOIN Gold_ModelVersions mv ON mv.ModelVersionID = p.ModelVersionID;
+GO
+
+CREATE OR ALTER VIEW vw_Gold_RidgePredictionExplanation AS
+SELECT
+    mv.ModelVersionID,
+    mv.ModelName,
+    mv.ModelVersion,
+    c.EvaluationName,
+    c.EvaluationSeason,
+    c.MatchID,
+    m.MatchDate,
+    ht.TeamName AS HomeTeam,
+    at.TeamName AS AwayTeam,
+    p.PredictedMargin,
+    c.FeatureName,
+    c.FeatureValue,
+    c.StandardizedFeatureValue,
+    c.Coefficient,
+    c.Contribution,
+    c.ContributionRank,
+    CASE
+        WHEN c.Contribution > 0 THEN 'Positive'
+        WHEN c.Contribution < 0 THEN 'Negative'
+        ELSE 'Neutral'
+    END AS ContributionDirection
+FROM Gold_PredictionFeatureContributions c
+JOIN Gold_MatchPredictions p ON p.PredictionID = c.PredictionID
+JOIN Gold_ModelVersions mv ON mv.ModelVersionID = c.ModelVersionID
+JOIN Silver_Matches m ON m.MatchID = c.MatchID
+JOIN Silver_Teams ht ON ht.TeamID = m.HomeTeamID
+JOIN Silver_Teams at ON at.TeamID = m.AwayTeamID;
+GO
+
+CREATE OR ALTER VIEW vw_Gold_RidgeStrongestDrivers AS
+SELECT *
+FROM vw_Gold_RidgePredictionExplanation
+WHERE ContributionRank BETWEEN 1 AND 3;
+GO
+
+CREATE OR ALTER VIEW vw_Gold_MarginModelComparison AS
+SELECT
+    ModelVersionID,
+    ModelName,
+    ModelVersion,
+    EvaluationName,
+    EvaluationSeason,
+    MatchesEvaluated,
+    MarginMAE,
+    MarginRMSE,
+    MedianAbsoluteMarginError,
+    MeanMarginError,
+    PctWithin5Points,
+    PctWithin10Points,
+    PctWithin15Points,
+    P75AbsoluteMarginError,
+    P90AbsoluteMarginError,
+    LargeErrorRate
+FROM vw_Gold_ModelPerformanceComparison
+WHERE ModelVersion IN ('v0.2.0', 'v0.3.0')
+  AND ModelName IN (
+      'EloOnlyBaseline',
+      'EloRollingMarginBaseline',
+      'RollingMarginOnlyBaseline',
+      'SeasonToDateMarginBaseline',
+      'RidgeMarginModel'
+  );
+GO
+
+CREATE OR ALTER VIEW vw_Gold_MarginChampionStatus AS
+SELECT
+    mv.ModelVersionID,
+    mv.ModelName,
+    mv.ModelVersion,
+    s.EvaluationName,
+    s.EvaluationStartSeason,
+    s.EvaluationEndSeason,
+    s.Status,
+    s.BenchmarkModelName,
+    s.BenchmarkModelVersion,
+    s.WeightedMarginMAE,
+    s.BenchmarkWeightedMarginMAE,
+    s.CompleteSeasonsBeaten,
+    s.OverallBias,
+    s.LargeErrorRate,
+    s.Reason,
+    s.CreatedAt
+FROM Gold_MarginModelChampionStatus s
+JOIN Gold_ModelVersions mv ON mv.ModelVersionID = s.ModelVersionID;
+GO
+
+CREATE OR ALTER VIEW vw_Gold_CombinedUpcomingPredictions AS
+SELECT
+    c.CombinedForwardPredictionID,
+    c.MatchID,
+    s.Season,
+    m.MatchDate,
+    m.RoundName,
+    ht.TeamName AS HomeTeam,
+    at.TeamName AS AwayTeam,
+    c.ProbabilityModelName,
+    c.ProbabilityModelVersion,
+    c.MarginModelName,
+    c.MarginModelVersion,
+    c.HomeWinProbability,
+    c.DrawProbability,
+    c.AwayWinProbability,
+    c.PredictedMargin,
+    c.ScorePredictionMethod,
+    c.CreatedAt
+FROM Gold_CombinedForwardPredictions c
+JOIN Silver_Matches m ON m.MatchID = c.MatchID
+JOIN Silver_Seasons s ON s.SeasonID = m.SeasonID
+JOIN Silver_Teams ht ON ht.TeamID = m.HomeTeamID
+JOIN Silver_Teams at ON at.TeamID = m.AwayTeamID
+WHERE m.MatchStatus <> 'Completed';
 GO
 
 PRINT 'Gold model evaluation views ready.';

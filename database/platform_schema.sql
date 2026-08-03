@@ -287,6 +287,89 @@ CREATE TABLE Gold_ModelCalibration (
 );
 GO
 
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Gold_RidgeModelParameters')
+CREATE TABLE Gold_RidgeModelParameters (
+    RidgeModelParameterID BIGINT IDENTITY PRIMARY KEY,
+    ModelVersionID        INT NOT NULL REFERENCES Gold_ModelVersions(ModelVersionID),
+    EvaluationName        VARCHAR(100) NOT NULL,
+    EvaluationSeason      INT NOT NULL,
+    FeatureName           VARCHAR(100) NOT NULL,
+    Coefficient           DECIMAL(18,9) NOT NULL,
+    FeatureMean           DECIMAL(18,9) NULL,
+    FeatureStdDev         DECIMAL(18,9) NULL,
+    ImputationValue       DECIMAL(18,9) NULL,
+    RidgeAlpha            DECIMAL(18,9) NOT NULL,
+    IsMissingnessIndicator BIT NOT NULL DEFAULT 0,
+    CreatedAt             DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT UQ_Gold_RidgeModelParameters UNIQUE (
+        ModelVersionID, EvaluationName, EvaluationSeason, FeatureName
+    )
+);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Gold_PredictionFeatureContributions')
+CREATE TABLE Gold_PredictionFeatureContributions (
+    PredictionFeatureContributionID BIGINT IDENTITY PRIMARY KEY,
+    PredictionID                    BIGINT NOT NULL REFERENCES Gold_MatchPredictions(PredictionID),
+    ModelVersionID                  INT NOT NULL REFERENCES Gold_ModelVersions(ModelVersionID),
+    MatchID                         INT NOT NULL REFERENCES Silver_Matches(MatchID),
+    EvaluationName                  VARCHAR(100) NOT NULL,
+    EvaluationSeason                INT NOT NULL,
+    FeatureName                     VARCHAR(100) NOT NULL,
+    FeatureValue                    DECIMAL(18,9) NULL,
+    StandardizedFeatureValue        DECIMAL(18,9) NULL,
+    Coefficient                     DECIMAL(18,9) NOT NULL,
+    Contribution                    DECIMAL(18,9) NOT NULL,
+    ContributionRank                INT NULL,
+    CreatedAt                       DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT UQ_Gold_PredictionFeatureContributions UNIQUE (PredictionID, FeatureName)
+);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Gold_MarginModelChampionStatus')
+CREATE TABLE Gold_MarginModelChampionStatus (
+    ChampionStatusID          BIGINT IDENTITY PRIMARY KEY,
+    ModelVersionID            INT NOT NULL REFERENCES Gold_ModelVersions(ModelVersionID),
+    EvaluationName            VARCHAR(100) NOT NULL,
+    EvaluationStartSeason     INT NOT NULL,
+    EvaluationEndSeason       INT NOT NULL,
+    Status                    VARCHAR(20) NOT NULL,
+    BenchmarkModelName        VARCHAR(100) NOT NULL,
+    BenchmarkModelVersion     VARCHAR(50) NOT NULL,
+    WeightedMarginMAE         DECIMAL(18,6) NULL,
+    BenchmarkWeightedMarginMAE DECIMAL(18,6) NULL,
+    CompleteSeasonsBeaten     INT NOT NULL,
+    OverallBias               DECIMAL(18,6) NULL,
+    LargeErrorRate            DECIMAL(18,6) NULL,
+    Reason                    VARCHAR(1000) NOT NULL,
+    CreatedAt                 DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT CK_Gold_MarginModelChampionStatus_Status CHECK (Status IN ('Champion', 'Challenger', 'Rejected')),
+    CONSTRAINT UQ_Gold_MarginModelChampionStatus UNIQUE (
+        ModelVersionID, EvaluationName, EvaluationStartSeason, EvaluationEndSeason
+    )
+);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Gold_CombinedForwardPredictions')
+CREATE TABLE Gold_CombinedForwardPredictions (
+    CombinedForwardPredictionID BIGINT IDENTITY PRIMARY KEY,
+    MatchID                     INT NOT NULL REFERENCES Silver_Matches(MatchID),
+    ProbabilityModelName        VARCHAR(100) NOT NULL,
+    ProbabilityModelVersion     VARCHAR(50) NOT NULL,
+    MarginModelName             VARCHAR(100) NOT NULL,
+    MarginModelVersion          VARCHAR(50) NOT NULL,
+    HomeWinProbability          DECIMAL(9,6) NULL,
+    DrawProbability             DECIMAL(9,6) NULL,
+    AwayWinProbability          DECIMAL(9,6) NULL,
+    PredictedMargin             DECIMAL(9,3) NULL,
+    ScorePredictionMethod       VARCHAR(100) NULL,
+    CreatedAt                   DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT UQ_Gold_CombinedForwardPredictions UNIQUE (
+        MatchID, ProbabilityModelName, ProbabilityModelVersion, MarginModelName, MarginModelVersion
+    )
+);
+GO
+
 -- ============================================================
 -- Silver load helpers from current NPC scraper tables
 -- ============================================================
