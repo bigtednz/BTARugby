@@ -167,11 +167,25 @@ Production champion registry:
 Production prediction principles:
 - resolve champion models from SQL by model name/version, not hard-coded IDs
 - generate predictions only for scheduled NPC fixtures
-- store generation datetime and feature cutoff date
+- store generation datetime, feature cutoff date, match date, local kickoff datetime and UTC kickoff datetime
 - expose confidence bands based on largest win probability
 - keep provisional score estimates out of the main production view
 - block critical data-quality failures from production upcoming outputs
 - show form, rest-day, head-to-head and team-sheet fields as context only for Elo predictions
+- preserve unknown kickoff times as NULL rather than displaying midnight
+
+### Kickoff Time Handling
+
+`Kickoff Date and Time Correction v0.4.1` keeps `MatchDate` as the durable date column and stores kickoff time in separate nullable fields.
+
+Source evidence:
+- RugbyPass `current-game-days` JSON includes `dateId`, `time`, `timeSmall` and `epoch`.
+- Example `950775`: `time=19:10pm NZST`, converted to `2026-08-06 19:10` local and `2026-08-06 07:10` UTC.
+- Example `950837`: `time=17:05pm NZDT`, converted to `2026-10-04 17:05` local and `2026-10-04 04:05` UTC.
+
+Timezone rule:
+- Use `Pacific/Auckland` for conversion.
+- If a source does not supply time, keep kickoff datetime fields NULL and report `Not supplied by source` or `Time TBC`.
 
 ## Platform Surfaces
 

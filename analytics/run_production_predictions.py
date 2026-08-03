@@ -16,9 +16,11 @@ from datetime import UTC, datetime
 
 try:
     from analytics import baseline_evaluation as base
+    from analytics.kickoff_times import auckland_date_from_utc, local_to_utc
 except ModuleNotFoundError:  # Direct script execution: python analytics\run_production_predictions.py
     sys.path.insert(0, os.path.dirname(__file__))
     import baseline_evaluation as base
+    from kickoff_times import auckland_date_from_utc, local_to_utc
 
 
 PROCESS_NAME = "ProductionPredictions_v0.4.0"
@@ -50,6 +52,10 @@ class ProductionMatch:
     venue: str | None
     source_system: str | None
     source_url: str | None
+    kickoff_datetime_local: datetime | None = None
+    kickoff_datetime_utc: datetime | None = None
+    kickoff_time_known: bool = False
+    kickoff_time_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,7 +105,13 @@ def predicted_winner(home: float, draw: float, away: float) -> str:
     return "D"
 
 
-def is_eligible_scheduled_match(match: base.Match, season: int | None = None, match_id: int | None = None) -> bool:
+def is_eligible_scheduled_match(
+    match: base.Match,
+    season: int | None = None,
+    match_id: int | None = None,
+    kickoff_datetime_utc: datetime | None = None,
+    now_utc: datetime | None = None,
+) -> bool:
     if season is not None and match.season != season:
         return False
     if match_id is not None and match.match_id != match_id:
@@ -108,6 +120,14 @@ def is_eligible_scheduled_match(match: base.Match, season: int | None = None, ma
         return False
     if match.home_team_id is None or match.away_team_id is None:
         return False
+    now_utc = now_utc or datetime.now(UTC).replace(tzinfo=None)
+    if kickoff_datetime_utc is not None:
+        return kickoff_datetime_utc > now_utc
+    # Unknown kickoff times remain eligible before the match date. On the match
+    # date itself, skip conservatively because the true kickoff may have passed.
+    if match.match_date is not None:
+        today_auckland = auckland_date_from_utc(now_utc)
+        return match.match_date > today_auckland
     return True
 
 
@@ -148,6 +168,10 @@ def load_production_matches(cursor) -> list[ProductionMatch]:
             m.HomeScore,
             m.AwayScore,
             m.MatchStatus,
+            m.KickoffDateTimeLocal,
+            m.KickoffDateTimeUTC,
+            m.KickoffTimeKnownFlag,
+            m.KickoffTimeSource,
             v.VenueName,
             m.SourceSystem,
             m.SourceURL
@@ -180,6 +204,10 @@ def load_production_matches(cursor) -> list[ProductionMatch]:
             venue=row.VenueName,
             source_system=row.SourceSystem,
             source_url=row.SourceURL,
+            kickoff_datetime_local=row.KickoffDateTimeLocal,
+            kickoff_datetime_utc=row.KickoffDateTimeUTC,
+            kickoff_time_known=bool(row.KickoffTimeKnownFlag),
+            kickoff_time_source=row.KickoffTimeSource,
         )
         for row in rows
     ]
@@ -442,6 +470,23 @@ def data_quality_issues_for_prediction(production_match: ProductionMatch, predic
         issues.append(quality_issue(production_match, "INVALID_PROBABILITIES", "Critical", "Probabilities are outside 0-1 or do not sum to one.", True))
     if cutoff is not None and match.match_date is not None and cutoff >= match.match_date:
         issues.append(quality_issue(production_match, "FEATURE_CUTOFF_LEAKAGE", "Critical", "Feature cutoff is at or after kickoff date.", True))
+    if production_match.kickoff_time_known and (
+        production_match.kickoff_datetime_local is None or production_match.kickoff_datetime_utc is None
+    ):
+        issues.append(quality_issue(production_match, "KICKOFF_KNOWN_MISSING_DATETIME", "Critical", "Kickoff known flag is set but local or UTC datetime is missing.", True))
+    if not production_match.kickoff_time_known and (
+        production_match.kickoff_datetime_local is not None or production_match.kickoff_datetime_utc is not None
+    ):
+        issues.append(quality_issue(production_match, "KICKOFF_DATETIME_WITHOUT_KNOWN_FLAG", "Critical", "Kickoff datetime is populated but known flag is not set.", True))
+    if production_match.kickoff_time_known and production_match.kickoff_datetime_local is not None:
+        if production_match.kickoff_datetime_local.hour == 0 and production_match.kickoff_datetime_local.minute == 0:
+            issues.append(quality_issue(production_match, "KICKOFF_MIDNIGHT_REQUIRES_EVIDENCE", "Warning", "Known kickoff is midnight; verify source evidence.", False))
+        if match.match_date is not None and production_match.kickoff_datetime_local.date() != match.match_date:
+            issues.append(quality_issue(production_match, "KICKOFF_DATE_MISMATCH", "Critical", "Local kickoff date differs from MatchDate.", True))
+    if production_match.kickoff_time_known and production_match.kickoff_datetime_local is not None and production_match.kickoff_datetime_utc is not None:
+        converted = local_to_utc(production_match.kickoff_datetime_local)
+        if converted != production_match.kickoff_datetime_utc:
+            issues.append(quality_issue(production_match, "KICKOFF_UTC_LOCAL_MISMATCH", "Critical", "Stored local and UTC kickoff datetimes are inconsistent.", True))
     if match.home_score == 0 and match.away_score == 0:
         issues.append(quality_issue(production_match, "SCHEDULED_ZERO_ZERO", "Information", "Scheduled fixture has 0-0 score placeholders.", False))
     return issues
@@ -596,7 +641,13 @@ def run(args: argparse.Namespace) -> None:
         sheets = team_sheet_availability(cursor)
         eligible = [
             match for match in production_matches
-            if is_eligible_scheduled_match(match.match, args.season, args.match_id)
+            if is_eligible_scheduled_match(
+                match.match,
+                args.season,
+                args.match_id,
+                match.kickoff_datetime_utc if match.kickoff_time_known else None,
+                generated_at,
+            )
         ]
         predictions = [
             build_prediction(match, all_matches, champions, sheets, generated_at)

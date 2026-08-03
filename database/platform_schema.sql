@@ -108,6 +108,11 @@ CREATE TABLE Silver_Matches (
     SeasonID      INT NOT NULL REFERENCES Silver_Seasons(SeasonID),
     RoundName     VARCHAR(50) NULL,
     MatchDate     DATE NULL,
+    KickoffDateTimeLocal DATETIME2 NULL,
+    KickoffDateTimeUTC   DATETIME2 NULL,
+    KickoffTimeKnownFlag BIT NOT NULL DEFAULT 0,
+    KickoffTimeSource    VARCHAR(200) NULL,
+    KickoffTimeCapturedAt DATETIME2 NULL,
     VenueID       INT NULL REFERENCES Silver_Venues(VenueID),
     HomeTeamID    INT NOT NULL REFERENCES Silver_Teams(TeamID),
     AwayTeamID    INT NOT NULL REFERENCES Silver_Teams(TeamID),
@@ -118,6 +123,26 @@ CREATE TABLE Silver_Matches (
     SourceURL     VARCHAR(500) NULL,
     UpdatedAt     DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
 );
+GO
+
+IF COL_LENGTH('Silver_Matches', 'KickoffDateTimeLocal') IS NULL
+ALTER TABLE Silver_Matches ADD KickoffDateTimeLocal DATETIME2 NULL;
+GO
+
+IF COL_LENGTH('Silver_Matches', 'KickoffDateTimeUTC') IS NULL
+ALTER TABLE Silver_Matches ADD KickoffDateTimeUTC DATETIME2 NULL;
+GO
+
+IF COL_LENGTH('Silver_Matches', 'KickoffTimeKnownFlag') IS NULL
+ALTER TABLE Silver_Matches ADD KickoffTimeKnownFlag BIT NOT NULL DEFAULT 0;
+GO
+
+IF COL_LENGTH('Silver_Matches', 'KickoffTimeSource') IS NULL
+ALTER TABLE Silver_Matches ADD KickoffTimeSource VARCHAR(200) NULL;
+GO
+
+IF COL_LENGTH('Silver_Matches', 'KickoffTimeCapturedAt') IS NULL
+ALTER TABLE Silver_Matches ADD KickoffTimeCapturedAt DATETIME2 NULL;
 GO
 
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Silver_TeamMatchStats')

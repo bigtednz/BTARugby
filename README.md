@@ -157,6 +157,24 @@ Production reporting views:
 
 Power BI build notes are in [docs/powerbi_reporting_guide.md](docs/powerbi_reporting_guide.md).
 
+## Kickoff Times v0.4.1
+
+`MatchDate` remains date-only. Real kickoff times are stored separately when RugbyPass supplies them:
+
+- `KickoffDateTimeLocal`
+- `KickoffDateTimeUTC`
+- `KickoffTimeKnownFlag`
+- `KickoffTimeSource`
+- `KickoffTimeCapturedAt`
+
+RugbyPass Bronze fixture snapshots include `current-game-days` fields such as `dateId`, `time`, `timeSmall` and `epoch`. The platform converts local kickoff time with `Pacific/Auckland`; unknown times remain `NULL` and are never replaced with midnight.
+
+Backfill existing Bronze snapshots:
+
+```powershell
+D:\Cursor\BTA_Rugby\.venv\Scripts\python.exe analytics\backfill_kickoff_times.py --season 2026
+```
+
 ## Near-Term Roadmap
 
 1. Improve the margin feature set before another champion challenge.

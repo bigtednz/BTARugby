@@ -21,9 +21,17 @@ import json
 import re
 import logging
 import os
+import sys
 import pyodbc
 from datetime import datetime
+from pathlib import Path
 from playwright.async_api import async_playwright
+
+try:
+    from analytics.kickoff_times import kickoff_from_match_dict, kickoff_from_values
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from analytics.kickoff_times import kickoff_from_match_dict, kickoff_from_values
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 SEASON           = 2026
@@ -89,6 +97,11 @@ CREATE TABLE {MATCHES_TABLE} (
     Season      INT,
     Round       VARCHAR(20),
     MatchDate   DATE,
+    KickoffDateTimeLocal DATETIME2 NULL,
+    KickoffDateTimeUTC   DATETIME2 NULL,
+    KickoffTimeKnownFlag BIT NOT NULL DEFAULT 0,
+    KickoffTimeSource    VARCHAR(200) NULL,
+    KickoffTimeCapturedAt DATETIME2 NULL,
     Venue       VARCHAR(100),
     HomeTeam    VARCHAR(50),
     AwayTeam    VARCHAR(50),
@@ -96,6 +109,19 @@ CREATE TABLE {MATCHES_TABLE} (
     AwayScore   INT,
     ScrapedAt   DATETIME DEFAULT GETDATE()
 )
+"""
+
+DDL_MATCH_KICKOFF_ALTERS = f"""
+IF COL_LENGTH('{MATCHES_TABLE}', 'KickoffDateTimeLocal') IS NULL
+ALTER TABLE {MATCHES_TABLE} ADD KickoffDateTimeLocal DATETIME2 NULL;
+IF COL_LENGTH('{MATCHES_TABLE}', 'KickoffDateTimeUTC') IS NULL
+ALTER TABLE {MATCHES_TABLE} ADD KickoffDateTimeUTC DATETIME2 NULL;
+IF COL_LENGTH('{MATCHES_TABLE}', 'KickoffTimeKnownFlag') IS NULL
+ALTER TABLE {MATCHES_TABLE} ADD KickoffTimeKnownFlag BIT NOT NULL DEFAULT 0;
+IF COL_LENGTH('{MATCHES_TABLE}', 'KickoffTimeSource') IS NULL
+ALTER TABLE {MATCHES_TABLE} ADD KickoffTimeSource VARCHAR(200) NULL;
+IF COL_LENGTH('{MATCHES_TABLE}', 'KickoffTimeCapturedAt') IS NULL
+ALTER TABLE {MATCHES_TABLE} ADD KickoffTimeCapturedAt DATETIME2 NULL;
 """
 
 DDL_STATS = f"""
@@ -424,20 +450,18 @@ def parse_match_from_dict(d: dict) -> dict | None:
                 return s
         return team_slug(name)
 
-    date_raw = str(deep_get(d, 'dateId', 'date', 'matchDate', 'startDate',
-                             'kickoffDate', 'kickOff') or '')
-    if re.match(r'^\d{8}$', date_raw):
-        match_date = f"{date_raw[:4]}-{date_raw[4:6]}-{date_raw[6:8]}"
-    elif re.match(r'^\d{4}-\d{2}-\d{2}', date_raw):
-        match_date = date_raw[:10]
-    else:
-        match_date = None
+    kickoff = kickoff_from_match_dict(d)
+    match_date = kickoff.match_date
     match_season = safe_int(match_date[:4]) if match_date else None
 
     return {
         "game_id":    gid,
         "season":     match_season or SEASON,
         "match_date": match_date,
+        "kickoff_datetime_local": kickoff.kickoff_datetime_local,
+        "kickoff_datetime_utc": kickoff.kickoff_datetime_utc,
+        "kickoff_time_known": 1 if kickoff.kickoff_time_known else 0,
+        "kickoff_time_source": kickoff.kickoff_time_source,
         "home_team":  home_name,
         "away_team":  away_name,
         "home_slug":  obj_slug(home_obj, home_name),
@@ -500,6 +524,7 @@ def parse_fixtures_html(content: str) -> dict:
         # Venue and round
         venue_m = re.search(r'class="venue">([^<]+)<', block)
         round_m = re.search(r'data-round="([^"]+)"', block)
+        start_time_m = re.search(r'class="start-time">([^<]+)<', block)
 
         # Date header: nearest class="date" div before this card
         match_date = None
@@ -514,6 +539,11 @@ def parse_fixtures_html(content: str) -> dict:
                     ).strftime('%Y-%m-%d')
                 except ValueError:
                     pass
+        kickoff = kickoff_from_values(
+            match_date,
+            start_time_m.group(1).strip() if start_time_m else None,
+            f"RugbyPass fixture card start-time={start_time_m.group(1).strip()}" if start_time_m else "Not supplied by source",
+        )
 
         games[game_id] = {
             "game_id":    game_id,
@@ -527,6 +557,10 @@ def parse_fixtures_html(content: str) -> dict:
             "venue":      venue_m.group(1).strip() if venue_m else None,
             "round":      round_m.group(1) if round_m else None,
             "match_date": match_date,
+            "kickoff_datetime_local": kickoff.kickoff_datetime_local,
+            "kickoff_datetime_utc": kickoff.kickoff_datetime_utc,
+            "kickoff_time_known": 1 if kickoff.kickoff_time_known else 0,
+            "kickoff_time_source": kickoff.kickoff_time_source,
         }
 
     return games
@@ -1323,13 +1357,37 @@ def write_to_sql(conn, match_info, stats):
     cur.execute(f"""
         MERGE {MATCHES_TABLE} AS t
         USING (SELECT ? AS MatchID) AS s ON t.MatchID = s.MatchID
+        WHEN MATCHED THEN UPDATE SET
+            KickoffDateTimeLocal = CASE WHEN ? = 1 THEN ? ELSE t.KickoffDateTimeLocal END,
+            KickoffDateTimeUTC = CASE WHEN ? = 1 THEN ? ELSE t.KickoffDateTimeUTC END,
+            KickoffTimeKnownFlag = CASE WHEN ? = 1 THEN 1 ELSE t.KickoffTimeKnownFlag END,
+            KickoffTimeSource = CASE WHEN ? = 1 THEN ? ELSE COALESCE(t.KickoffTimeSource, ?) END,
+            KickoffTimeCapturedAt = CASE WHEN ? = 1 THEN SYSUTCDATETIME() ELSE t.KickoffTimeCapturedAt END
         WHEN NOT MATCHED THEN
-            INSERT (MatchID,Season,Round,MatchDate,Venue,HomeTeam,AwayTeam,HomeScore,AwayScore)
-            VALUES (?,?,?,?,?,?,?,?,?);
+            INSERT (
+                MatchID,Season,Round,MatchDate,KickoffDateTimeLocal,KickoffDateTimeUTC,
+                KickoffTimeKnownFlag,KickoffTimeSource,KickoffTimeCapturedAt,
+                Venue,HomeTeam,AwayTeam,HomeScore,AwayScore
+            )
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?);
     """, (gid,
+          match_info.get("kickoff_time_known", 0),
+          match_info.get("kickoff_datetime_local"),
+          match_info.get("kickoff_time_known", 0),
+          match_info.get("kickoff_datetime_utc"),
+          match_info.get("kickoff_time_known", 0),
+          match_info.get("kickoff_time_known", 0),
+          match_info.get("kickoff_time_source"),
+          match_info.get("kickoff_time_source"),
+          match_info.get("kickoff_time_known", 0),
           gid, match_season,
           match_info.get("round"),
           match_info.get("match_date"),
+          match_info.get("kickoff_datetime_local"),
+          match_info.get("kickoff_datetime_utc"),
+          match_info.get("kickoff_time_known", 0),
+          match_info.get("kickoff_time_source"),
+          datetime.utcnow() if match_info.get("kickoff_time_known", 0) else None,
           match_info.get("venue"),
           match_info.get("home_team"),
           match_info.get("away_team"),
@@ -1515,6 +1573,7 @@ async def main():
         cur  = conn.cursor()
         cur.execute(DDL_BRONZE_SNAPSHOTS)
         cur.execute(DDL_MATCHES)
+        cur.execute(DDL_MATCH_KICKOFF_ALTERS)
         cur.execute(DDL_STATS)
         cur.execute(DDL_PLAYER_STATS)
         cur.execute(DDL_PLAYER_APPEARANCES)

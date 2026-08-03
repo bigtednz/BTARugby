@@ -292,7 +292,17 @@ SELECT
     c.CompetitionCode AS Competition,
     s.Season,
     m.RoundName AS Round,
-    CAST(m.MatchDate AS DATETIME2) AS KickoffDateTime,
+    m.MatchDate,
+    m.KickoffDateTimeLocal,
+    m.KickoffDateTimeUTC,
+    CAST(CASE WHEN m.KickoffTimeKnownFlag = 1 THEN m.KickoffDateTimeLocal ELSE NULL END AS DATETIME2) AS KickoffDateTime,
+    m.KickoffTimeKnownFlag,
+    CASE
+        WHEN m.KickoffTimeKnownFlag = 1 THEN 'Confirmed'
+        WHEN m.KickoffTimeSource IS NULL OR m.KickoffTimeSource = 'Not supplied by source' THEN 'Not supplied by source'
+        ELSE 'Time TBC'
+    END AS KickoffTimeStatus,
+    m.KickoffTimeSource,
     v.VenueName AS Venue,
     ht.TeamID AS HomeTeamID,
     ht.TeamName AS HomeTeam,

@@ -71,11 +71,25 @@ class ProductionPredictionTests(unittest.TestCase):
         self.assertEqual(confidence_level(0.80, 0.01, 0.19), "Very High")
 
     def test_scheduled_eligibility_excludes_completed(self):
-        self.assertTrue(is_eligible_scheduled_match(match(2026, 10), 2026, None))
+        self.assertTrue(is_eligible_scheduled_match(match(2026, 10), 2026, None, None, datetime(2026, 8, 1)))
         self.assertFalse(is_eligible_scheduled_match(match(2026, 11, "Completed", 20, 10), 2026, None))
         self.assertFalse(is_eligible_scheduled_match(match(2025, 12), 2026, None))
         self.assertTrue(is_eligible_scheduled_match(match(2026, 13), None, 13))
         self.assertFalse(is_eligible_scheduled_match(match(2026, 14), None, 13))
+
+    def test_unknown_time_production_eligibility(self):
+        future = match(2026, 15, day=10)
+        same_day = match(2026, 16, day=10)
+
+        self.assertTrue(is_eligible_scheduled_match(future, now_utc=datetime(2026, 8, 8, 12, 0)))
+        self.assertFalse(is_eligible_scheduled_match(same_day, now_utc=datetime(2026, 8, 10, 0, 30)))
+
+    def test_known_time_production_eligibility(self):
+        m = match(2026, 17, day=10)
+        kickoff_utc = datetime(2026, 8, 10, 7, 10)
+
+        self.assertTrue(is_eligible_scheduled_match(m, kickoff_datetime_utc=kickoff_utc, now_utc=datetime(2026, 8, 10, 7, 0)))
+        self.assertFalse(is_eligible_scheduled_match(m, kickoff_datetime_utc=kickoff_utc, now_utc=datetime(2026, 8, 10, 7, 11)))
 
     def test_probability_validation_and_predicted_winner(self):
         self.assertTrue(validate_probability_sum(0.55, 0.05, 0.40))

@@ -214,6 +214,52 @@ Current production run:
 - Warnings: 63 missing team sheets
 - Information: 63 scheduled 0-0 placeholders
 
+### Kickoff Date and Time Correction v0.4.1
+
+- Confirmed the midnight issue came from `vw_Gold_ProductionUpcomingPredictions` casting date-only `MatchDate` to `DATETIME2`.
+- Confirmed RugbyPass Bronze fixture snapshots contain real kickoff source fields:
+  - `dateId`
+  - `dateFull`
+  - `time`
+  - `timeSmall`
+  - `epoch`
+- Added kickoff columns to NPC and Silver match tables:
+  - `KickoffDateTimeLocal`
+  - `KickoffDateTimeUTC`
+  - `KickoffTimeKnownFlag`
+  - `KickoffTimeSource`
+  - `KickoffTimeCapturedAt`
+- Added `analytics/kickoff_times.py` for source parsing and `Pacific/Auckland` conversion.
+- Added `analytics/backfill_kickoff_times.py` to backfill existing Bronze snapshots without a rescrape.
+- Updated the RugbyPass scraper to capture kickoff fields on future runs.
+- Updated `database/load_npc_to_silver.sql` to carry kickoff fields into Silver.
+- Updated `vw_Gold_ProductionUpcomingPredictions` to expose:
+  - `MatchDate`
+  - `KickoffDateTimeLocal`
+  - `KickoffDateTimeUTC`
+  - nullable deprecated `KickoffDateTime`
+  - `KickoffTimeKnownFlag`
+  - `KickoffTimeStatus`
+  - `KickoffTimeSource`
+- Removed the misleading `CAST(MatchDate AS DATETIME2)` midnight presentation.
+
+Backfill result:
+
+- Season: 2026
+- Bronze fixture snapshots inspected: 13
+- Known kickoff matches found: 70
+- NPC rows updated: 70
+- Scheduled production fixtures with confirmed kickoff times: 63
+- Scheduled production fixtures with unknown kickoff times: 0
+- Manufactured midnight kickoff values remaining: 0
+
+Example conversions:
+
+| MatchID | Source Time | Local Kickoff | UTC Kickoff |
+| --- | --- | --- | --- |
+| 950775 | `19:10pm NZST` | 2026-08-06 19:10 | 2026-08-06 07:10 |
+| 950837 | `17:05pm NZDT` | 2026-10-04 17:05 | 2026-10-04 04:05 |
+
 ### Data Reset and Repeatability
 
 - Added `database/reset_data.sql` to clear Bronze/Silver/Gold and NPC scraper tables for clean reloads.
@@ -255,7 +301,7 @@ Current production run:
 | Ridge v0.3 contribution rows | 6,622 |
 | Production predictions | 63 |
 | Production champion registry rows | 3 |
-| Production pipeline runs | 2 |
+| Production pipeline runs | 3 |
 
 ### Baseline Backtest
 
@@ -300,6 +346,7 @@ Across 2023-2025 completed seasons, `EloOnlyBaseline v0.2.0` is currently the st
 - Team sheets are available for only some matches.
 - `RidgeMarginModel v0.3.0` did not improve the current margin benchmark, so combined forward predictions are not promoted.
 - Future 2026 team sheets are not available yet, so current production predictions carry warning status until squads are published.
+- Kickoff time is now available for the current 2026 RugbyPass fixture set; future sources may still omit time, in which case production views keep kickoff datetime values NULL.
 - No injury, weather, travel, betting market, or squad announcement source is integrated yet.
 - The baseline models are intentionally simple; calibration rows now exist, but no probability recalibration has been fitted yet.
 

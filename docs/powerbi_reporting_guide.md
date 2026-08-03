@@ -26,6 +26,12 @@ Create relationships using durable IDs:
 - `ModelVersionID` where exposed in model summary and evaluation views
 - Keep calibration and model comparison as separate fact-style tables; do not average already aggregated season metrics across seasons without weighting by match count.
 
+Sort upcoming fixtures by:
+
+1. `MatchDate`
+2. `KickoffDateTimeLocal`
+3. `MatchID`
+
 ## Essential Measures
 
 ```DAX
@@ -71,6 +77,13 @@ AVERAGE('vw_Gold_ProductionHistoricalPredictions'[AbsoluteMarginError])
 
 Pipeline Errors =
 SUM('vw_Gold_ProductionPipelineRuns'[ErrorCount])
+
+Kickoff Display =
+IF(
+    'vw_Gold_ProductionUpcomingPredictions'[KickoffTimeKnownFlag] = TRUE(),
+    FORMAT('vw_Gold_ProductionUpcomingPredictions'[KickoffDateTimeLocal], "ddd d mmm yyyy, h:mm AM/PM"),
+    FORMAT('vw_Gold_ProductionUpcomingPredictions'[MatchDate], "ddd d mmm yyyy") & " - time TBC"
+)
 ```
 
 Formatting:
@@ -86,7 +99,7 @@ Source view: `vw_Gold_ProductionUpcomingPredictions`
 
 Recommended visuals:
 
-- Table: `KickoffDateTime`, `Round`, `HomeTeam`, `AwayTeam`, `PredictedWinner`, `HomeWinProbability`, `DrawProbability`, `AwayWinProbability`, `PredictedHomeMargin`, `ConfidenceLevel`, `DataQualityStatus`
+- Table: `Kickoff Display`, `Round`, `HomeTeam`, `AwayTeam`, `PredictedWinner`, `HomeWinProbability`, `DrawProbability`, `AwayWinProbability`, `PredictedHomeMargin`, `ConfidenceLevel`, `DataQualityStatus`
 - Cards: `Upcoming Matches`, `High Confidence Matches`, `Critical Data Quality Issues`
 - Slicers: `Season`, `Round`, `ConfidenceLevel`, `DataQualityStatus`
 
@@ -99,8 +112,16 @@ Tooltips:
 
 - Probability model name/version
 - Margin model name/version
+- `KickoffTimeStatus`
+- `KickoffDateTimeUTC`
 - Feature cutoff date
 - Prediction generated datetime
+
+Display rule:
+
+- Known time: `Sat 3 Oct 2026, 2:05 PM`
+- Unknown time: `Sat 3 Oct 2026 - time TBC`
+- Do not use `KickoffDateTime` for new visuals; it remains only as a nullable backward-compatible alias for known local kickoff datetimes.
 
 Drill-through:
 

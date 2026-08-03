@@ -7,6 +7,26 @@
 USE RugbyAnalytics;
 GO
 
+IF OBJECT_ID('NPC_Matches', 'U') IS NOT NULL AND COL_LENGTH('NPC_Matches', 'KickoffDateTimeLocal') IS NULL
+ALTER TABLE NPC_Matches ADD KickoffDateTimeLocal DATETIME2 NULL;
+GO
+
+IF OBJECT_ID('NPC_Matches', 'U') IS NOT NULL AND COL_LENGTH('NPC_Matches', 'KickoffDateTimeUTC') IS NULL
+ALTER TABLE NPC_Matches ADD KickoffDateTimeUTC DATETIME2 NULL;
+GO
+
+IF OBJECT_ID('NPC_Matches', 'U') IS NOT NULL AND COL_LENGTH('NPC_Matches', 'KickoffTimeKnownFlag') IS NULL
+ALTER TABLE NPC_Matches ADD KickoffTimeKnownFlag BIT NOT NULL DEFAULT 0;
+GO
+
+IF OBJECT_ID('NPC_Matches', 'U') IS NOT NULL AND COL_LENGTH('NPC_Matches', 'KickoffTimeSource') IS NULL
+ALTER TABLE NPC_Matches ADD KickoffTimeSource VARCHAR(200) NULL;
+GO
+
+IF OBJECT_ID('NPC_Matches', 'U') IS NOT NULL AND COL_LENGTH('NPC_Matches', 'KickoffTimeCapturedAt') IS NULL
+ALTER TABLE NPC_Matches ADD KickoffTimeCapturedAt DATETIME2 NULL;
+GO
+
 DECLARE @CompetitionID INT;
 
 MERGE Silver_Competitions AS t
@@ -75,6 +95,11 @@ USING (
         ss.SeasonID,
         m.Round AS RoundName,
         m.MatchDate,
+        m.KickoffDateTimeLocal,
+        m.KickoffDateTimeUTC,
+        m.KickoffTimeKnownFlag,
+        m.KickoffTimeSource,
+        m.KickoffTimeCapturedAt,
         v.VenueID,
         ht.TeamID AS HomeTeamID,
         at.TeamID AS AwayTeamID,
@@ -106,6 +131,11 @@ WHEN MATCHED THEN UPDATE SET
     SeasonID = s.SeasonID,
     RoundName = s.RoundName,
     MatchDate = s.MatchDate,
+    KickoffDateTimeLocal = s.KickoffDateTimeLocal,
+    KickoffDateTimeUTC = s.KickoffDateTimeUTC,
+    KickoffTimeKnownFlag = s.KickoffTimeKnownFlag,
+    KickoffTimeSource = s.KickoffTimeSource,
+    KickoffTimeCapturedAt = s.KickoffTimeCapturedAt,
     VenueID = s.VenueID,
     HomeTeamID = s.HomeTeamID,
     AwayTeamID = s.AwayTeamID,
@@ -116,10 +146,12 @@ WHEN MATCHED THEN UPDATE SET
     SourceURL = s.SourceURL,
     UpdatedAt = SYSUTCDATETIME()
 WHEN NOT MATCHED THEN INSERT (
-    MatchID, SeasonID, RoundName, MatchDate, VenueID, HomeTeamID, AwayTeamID,
+    MatchID, SeasonID, RoundName, MatchDate, KickoffDateTimeLocal, KickoffDateTimeUTC,
+    KickoffTimeKnownFlag, KickoffTimeSource, KickoffTimeCapturedAt, VenueID, HomeTeamID, AwayTeamID,
     HomeScore, AwayScore, MatchStatus, SourceSystem, SourceURL
 ) VALUES (
-    s.MatchID, s.SeasonID, s.RoundName, s.MatchDate, s.VenueID, s.HomeTeamID,
+    s.MatchID, s.SeasonID, s.RoundName, s.MatchDate, s.KickoffDateTimeLocal, s.KickoffDateTimeUTC,
+    s.KickoffTimeKnownFlag, s.KickoffTimeSource, s.KickoffTimeCapturedAt, s.VenueID, s.HomeTeamID,
     s.AwayTeamID, s.HomeScore, s.AwayScore, s.MatchStatus, s.SourceSystem, s.SourceURL
 );
 
