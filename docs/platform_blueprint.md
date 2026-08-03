@@ -80,8 +80,8 @@ Build transparent baseline models before advanced ML.
 Models:
 - home team win-rate baseline
 - season points differential baseline
-- Elo rating model
-- rolling margin model
+- Elo rating model implemented as `EloRollingMarginBaseline v0.1.0`
+- rolling margin model implemented as part of `EloRollingMarginBaseline v0.1.0`
 
 Targets:
 - win probability
@@ -109,6 +109,12 @@ Metrics:
 - margin mean absolute error
 - calibration by confidence band
 - return over baseline
+
+Current baseline metrics are stored in `Gold_BacktestResults` after running:
+
+```powershell
+python analytics/run_baseline_predictions.py
+```
 
 ## Platform Surfaces
 

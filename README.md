@@ -39,6 +39,7 @@ Run these scripts in order against SQL Server:
 3. `rugbypass_scraper/rugbypass_scraper/scraper.py`
 4. `database/load_npc_to_silver.sql`
 5. `database/gold_feature_views.sql`
+6. `analytics/run_baseline_predictions.py`
 
 The database name is currently:
 
@@ -54,9 +55,23 @@ RugbyAnalytics
 - `vw_Gold_TeamSheetFeatures`: listed players, starters, substitutes, and returning-player continuity.
 - `vw_Gold_MatchFeatureMatrix`: one model-ready row per completed match.
 
+## Current Baseline Model
+
+`analytics/run_baseline_predictions.py` writes an explainable Elo plus rolling-margin baseline to:
+
+- `Gold_ModelVersions`
+- `Gold_MatchPredictions`
+- `Gold_BacktestResults`
+
+Current baseline version:
+
+```text
+EloRollingMarginBaseline v0.1.0
+```
+
 ## Near-Term Roadmap
 
-1. Implement Elo and rolling-margin baseline predictions.
-2. Store predictions in `Gold_MatchPredictions`.
-3. Backtest every model version before using it for forward predictions.
-4. Add richer source data for team totals, events, and injuries when available.
+1. Add confidence-band calibration and model comparison views.
+2. Build logistic/ridge feature models against the Gold feature matrix.
+3. Add richer source data for team totals, events, and injuries when available.
+4. Surface predictions and explanations in a dashboard/API.
