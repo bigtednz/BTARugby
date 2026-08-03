@@ -15,6 +15,7 @@ Config:
 """
 
 import asyncio
+import hashlib
 import json
 import re
 import logging
@@ -159,6 +160,23 @@ CREATE TABLE {PLAYER_STATS_TABLE} (
     ScrapedAt      DATETIME DEFAULT GETDATE(),
     CONSTRAINT {PLAYER_STAT_UQ} UNIQUE (MatchID, StatName, Team, PlayerName)
 )
+"""
+
+DDL_BRONZE_SNAPSHOTS = """
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Bronze_SourceSnapshots')
+CREATE TABLE Bronze_SourceSnapshots (
+    SourceSnapshotID BIGINT IDENTITY PRIMARY KEY,
+    SourceSystem     VARCHAR(50) NOT NULL,
+    CompetitionCode  VARCHAR(20) NULL,
+    Season           INT NULL,
+    SourceEntity     VARCHAR(50) NOT NULL,
+    SourceEntityID   VARCHAR(100) NULL,
+    SourceURL        VARCHAR(500) NOT NULL,
+    ContentType      VARCHAR(100) NULL,
+    ContentHash      CHAR(64) NULL,
+    ContentText      NVARCHAR(MAX) NULL,
+    CapturedAt       DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);
 """
 
 DDL_ALTER = f"""
@@ -475,7 +493,7 @@ def parse_fixtures_html(content: str) -> dict:
 
 
 # ── STEP 1: DISCOVER GAME IDs ─────────────────────────────────────────────────
-async def get_game_ids(page):
+async def get_game_ids(page, conn=None):
     log.info("Loading fixtures page to discover game IDs...")
 
     api_responses = []
@@ -512,6 +530,13 @@ async def get_game_ids(page):
         await page.wait_for_timeout(1500)
 
     content = await page.content()
+    write_bronze_snapshot(
+        conn,
+        source_entity="fixtures",
+        source_entity_id=f"{COMPETITION_CODE}-{SEASON}",
+        source_url=FIXTURES_URL,
+        content=content,
+    )
     games = {}
 
     def merge_candidates(candidates):
@@ -570,7 +595,7 @@ async def get_game_ids(page):
     return games
 
 # ── STEP 2: MATCH METADATA ────────────────────────────────────────────────────
-async def get_match_info(page, game_id, prefilled=None):
+async def get_match_info(page, game_id, prefilled=None, conn=None):
     """
     Use metadata already captured from the fixtures page when available.
     Falls back to loading the stats page and parsing __NEXT_DATA__ or HTML.
@@ -597,6 +622,13 @@ async def get_match_info(page, game_id, prefilled=None):
         await page.goto(url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT)
     await page.wait_for_timeout(3000)
     content = await page.content()
+    write_bronze_snapshot(
+        conn,
+        source_entity="match-metadata",
+        source_entity_id=game_id,
+        source_url=url,
+        content=content,
+    )
 
     # ── Try __NEXT_DATA__ first ────────────────────────────────────────────────
     next_data = parse_next_data(content)
@@ -784,7 +816,7 @@ def extract_stats_from_json(data: dict, side: str) -> dict:
 
     return stats
 
-async def get_match_stats(page, game_id, away_slug="", home_slug=""):
+async def get_match_stats(page, game_id, away_slug="", home_slug="", conn=None):
     """
     Load the RugbyPass stats page and extract all match statistics.
     URL format: /live/{away}-vs-{home}/stats/?g={game_id}  (away team is FIRST)
@@ -819,6 +851,13 @@ async def get_match_stats(page, game_id, away_slug="", home_slug=""):
     await page.goto(url, wait_until="networkidle", timeout=REQUEST_TIMEOUT)
     await page.wait_for_timeout(3000)
     content = await page.content()
+    write_bronze_snapshot(
+        conn,
+        source_entity="team-stats",
+        source_entity_id=game_id,
+        source_url=url,
+        content=content,
+    )
     stats = {}
 
     # ── Primary: __NEXT_DATA__ ────────────────────────────────────────────────
@@ -930,7 +969,7 @@ async def get_match_stats(page, game_id, away_slug="", home_slug=""):
 
     return stats
 
-async def get_player_stats(page, game_id, away_slug="", home_slug=""):
+async def get_player_stats(page, game_id, away_slug="", home_slug="", conn=None):
     """
     Scrape RugbyPass NPC player leaderboard rows from the match stats page.
 
@@ -949,6 +988,14 @@ async def get_player_stats(page, game_id, away_slug="", home_slug=""):
         log.info(f"  Retrying player stats URL without game ID: {url}")
         await page.goto(url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT)
     await page.wait_for_timeout(3000)
+    content = await page.content()
+    write_bronze_snapshot(
+        conn,
+        source_entity="player-stats",
+        source_entity_id=game_id,
+        source_url=url,
+        content=content,
+    )
 
     stat_options = await page.evaluate("""
         () => {
@@ -1017,6 +1064,35 @@ async def get_player_stats(page, game_id, away_slug="", home_slug=""):
     return rows
 
 # ── STEP 4: WRITE TO SQL ──────────────────────────────────────────────────────
+def write_bronze_snapshot(conn, source_entity, source_url, content,
+                          source_entity_id=None, content_type="text/html"):
+    if not conn or not content:
+        return
+
+    content_hash = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
+    cur = conn.cursor()
+    cur.execute("""
+        IF NOT EXISTS (
+            SELECT 1
+            FROM Bronze_SourceSnapshots
+            WHERE SourceSystem = ?
+              AND SourceURL = ?
+              AND ContentHash = ?
+        )
+        INSERT INTO Bronze_SourceSnapshots (
+            SourceSystem, CompetitionCode, Season, SourceEntity, SourceEntityID,
+            SourceURL, ContentType, ContentHash, ContentText
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+    """, (
+        "RugbyPass", source_url, content_hash,
+        "RugbyPass", COMPETITION_CODE, SEASON, source_entity,
+        str(source_entity_id) if source_entity_id is not None else None,
+        source_url, content_type, content_hash, content,
+    ))
+    conn.commit()
+    log.info(f"  Bronze snapshot saved: {source_entity} {source_entity_id or ''}".rstrip())
+
 def write_to_sql(conn, match_info, stats):
     cur = conn.cursor()
     gid = match_info["game_id"]
@@ -1174,6 +1250,7 @@ async def main():
     try:
         conn = pyodbc.connect(SQL_CONNECTION_STRING)
         cur  = conn.cursor()
+        cur.execute(DDL_BRONZE_SNAPSHOTS)
         cur.execute(DDL_MATCHES)
         cur.execute(DDL_STATS)
         cur.execute(DDL_PLAYER_STATS)
@@ -1199,7 +1276,7 @@ async def main():
         )
         page = await context.new_page()
 
-        games = await get_game_ids(page)
+        games = await get_game_ids(page, conn=conn)
 
         if not games:
             log.error("No game IDs found.")
@@ -1221,7 +1298,7 @@ async def main():
                     log.info("  → Already in DB, skipping")
                     continue
 
-                match_info = await get_match_info(page, game_id, games[game_id])
+                match_info = await get_match_info(page, game_id, games[game_id], conn=conn)
 
                 if not match_info.get("home_team"):
                     log.warning("  → Could not parse match metadata")
@@ -1234,12 +1311,14 @@ async def main():
                     page, game_id,
                     away_slug=match_info.get("away_slug", ""),
                     home_slug=match_info.get("home_slug", ""),
+                    conn=conn,
                 )
                 write_to_sql(conn, match_info, match_stats)
                 player_stats = await get_player_stats(
                     page, game_id,
                     away_slug=match_info.get("away_slug", ""),
                     home_slug=match_info.get("home_slug", ""),
+                    conn=conn,
                 )
                 write_player_stats_to_sql(conn, player_stats)
                 success += 1

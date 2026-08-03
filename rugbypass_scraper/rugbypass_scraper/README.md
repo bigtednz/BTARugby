@@ -51,7 +51,8 @@ python scraper.py
 2. Extracts game IDs and match metadata.
 3. Visits each match stats page.
 4. Parses player leaderboard rows into a separate player-stat table.
-5. Upserts into SQL Server so re-runs do not duplicate matches.
+5. Captures raw RugbyPass page HTML into `Bronze_SourceSnapshots`.
+6. Upserts into SQL Server so re-runs do not duplicate matches or player rows.
 
 ## Database Structure
 

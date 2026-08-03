@@ -22,6 +22,7 @@ rugbypass_scraper/rugbypass_scraper/scraper.py
 
 It currently populates:
 
+- `Bronze_SourceSnapshots`
 - `NPC_Matches`
 - `NPC_TeamStats`
 - `NPC_PlayerStats`
@@ -46,9 +47,8 @@ RugbyAnalytics
 
 ## Near-Term Roadmap
 
-1. Capture RugbyPass raw HTML/JSON into `Bronze_SourceSnapshots`.
-2. Load current NPC scraper tables into Silver tables.
-3. Build more Gold feature views for form, attack, defence, and player trends.
-4. Implement Elo and rolling-margin baseline predictions.
-5. Store predictions in `Gold_MatchPredictions`.
-6. Backtest every model version before using it for forward predictions.
+1. Load current NPC scraper tables into Silver tables after each scrape.
+2. Build more Gold feature views for form, attack, defence, and player trends.
+3. Implement Elo and rolling-margin baseline predictions.
+4. Store predictions in `Gold_MatchPredictions`.
+5. Backtest every model version before using it for forward predictions.
