@@ -39,7 +39,7 @@ def parse_target_seasons(default):
             years.append(int(item))
     return years
 
-TARGET_SEASONS   = parse_target_seasons([2023, 2024, 2025, 2026])
+TARGET_SEASONS   = parse_target_seasons([2021, 2022, 2023, 2024, 2025, 2026])
 COMPETITION_CODE = "NPC"
 COMPETITION_NAME = "Hilux NPC"
 TOURNAMENT_URI   = "bunnings-npc"

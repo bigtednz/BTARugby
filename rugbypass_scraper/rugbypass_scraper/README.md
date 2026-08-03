@@ -53,6 +53,9 @@ $env:NPC_TARGET_SEASONS='2025'
 python scraper.py
 ```
 
+The RugbyPass archive endpoint currently exposes NPC fixtures from 2021 onward.
+The 2020 archive request returns no NPC games.
+
 ## What It Does
 
 1. Opens the RugbyPass Hilux NPC fixtures page.
