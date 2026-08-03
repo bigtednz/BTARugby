@@ -64,6 +64,13 @@ Feature examples:
 - venue effect
 - Elo-style team rating
 
+Implemented Gold views:
+- `vw_Gold_TeamMatchBase`
+- `vw_Gold_TeamFormFeatures`
+- `vw_Gold_HeadToHeadFeatures`
+- `vw_Gold_TeamSheetFeatures`
+- `vw_Gold_MatchFeatureMatrix`
+
 ## Prediction Roadmap
 
 ### Phase 1: Baselines

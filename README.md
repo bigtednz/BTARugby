@@ -46,11 +46,17 @@ The database name is currently:
 RugbyAnalytics
 ```
 
+## Current Gold Views
+
+- `vw_Gold_TeamMatchBase`: team-perspective match results.
+- `vw_Gold_TeamFormFeatures`: rolling form, attack/defence trends, venue splits, and rest days.
+- `vw_Gold_HeadToHeadFeatures`: recent head-to-head result and margin signals.
+- `vw_Gold_TeamSheetFeatures`: listed players, starters, substitutes, and returning-player continuity.
+- `vw_Gold_MatchFeatureMatrix`: one model-ready row per completed match.
+
 ## Near-Term Roadmap
 
-1. Backfill historical NPC seasons into Bronze and `NPC_Matches`.
-2. Load all available NPC seasons into Silver tables after each scrape.
-3. Build more Gold feature views for form, attack, defence, and player trends.
-4. Implement Elo and rolling-margin baseline predictions.
-5. Store predictions in `Gold_MatchPredictions`.
-6. Backtest every model version before using it for forward predictions.
+1. Implement Elo and rolling-margin baseline predictions.
+2. Store predictions in `Gold_MatchPredictions`.
+3. Backtest every model version before using it for forward predictions.
+4. Add richer source data for team totals, events, and injuries when available.

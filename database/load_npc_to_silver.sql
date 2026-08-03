@@ -81,6 +81,7 @@ USING (
         m.HomeScore,
         m.AwayScore,
         CASE
+            WHEN m.MatchDate > CAST(GETDATE() AS DATE) THEN 'Scheduled'
             WHEN m.HomeScore IS NULL OR m.AwayScore IS NULL THEN 'Scheduled'
             ELSE 'Completed'
         END AS MatchStatus,
