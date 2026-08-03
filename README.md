@@ -47,8 +47,9 @@ RugbyAnalytics
 
 ## Near-Term Roadmap
 
-1. Load current NPC scraper tables into Silver tables after each scrape.
-2. Build more Gold feature views for form, attack, defence, and player trends.
-3. Implement Elo and rolling-margin baseline predictions.
-4. Store predictions in `Gold_MatchPredictions`.
-5. Backtest every model version before using it for forward predictions.
+1. Backfill historical NPC seasons into Bronze and `NPC_Matches`.
+2. Load all available NPC seasons into Silver tables after each scrape.
+3. Build more Gold feature views for form, attack, defence, and player trends.
+4. Implement Elo and rolling-margin baseline predictions.
+5. Store predictions in `Gold_MatchPredictions`.
+6. Backtest every model version before using it for forward predictions.

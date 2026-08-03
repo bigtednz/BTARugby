@@ -16,6 +16,7 @@ Config:
 
 import asyncio
 import hashlib
+import html as html_lib
 import json
 import re
 import logging
@@ -26,6 +27,7 @@ from playwright.async_api import async_playwright
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 SEASON           = 2026
+TARGET_SEASONS   = [2023, 2024, 2025, 2026]
 COMPETITION_CODE = "NPC"
 COMPETITION_NAME = "Hilux NPC"
 TOURNAMENT_URI   = "bunnings-npc"
@@ -385,7 +387,7 @@ def parse_match_from_dict(d: dict) -> dict | None:
     # Derive slug: prefer explicit slug field, fall back to generating from name
     def obj_slug(obj, name):
         if isinstance(obj, dict):
-            s = obj.get('slug') or obj.get('uri') or obj.get('urlSlug') or ''
+            s = obj.get('slug') or obj.get('uri') or obj.get('urlSlug') or obj.get('baseUri') or ''
             if s:
                 return s
         return team_slug(name)
@@ -398,9 +400,11 @@ def parse_match_from_dict(d: dict) -> dict | None:
         match_date = date_raw[:10]
     else:
         match_date = None
+    match_season = safe_int(match_date[:4]) if match_date else None
 
     return {
         "game_id":    gid,
+        "season":     match_season or SEASON,
         "match_date": match_date,
         "home_team":  home_name,
         "away_team":  away_name,
@@ -410,6 +414,9 @@ def parse_match_from_dict(d: dict) -> dict | None:
         "away_score": safe_int(deep_get(d, 'awayScore', 'away_score')),
         "round":      str(deep_get(d, 'round', 'roundName', 'roundNumber') or ''),
         "venue":      deep_get(d, 'venue', 'venueName', 'ground', 'stadium'),
+        "status":     deep_get(d, 'status', 'matchStatus'),
+        "played":     bool(deep_get(d, 'played', default=False)),
+        "source_url":  deep_get(d, 'url', 'matchUrl'),
     }
 
 def has_meaningful_stats(stats: dict) -> bool:
@@ -478,6 +485,7 @@ def parse_fixtures_html(content: str) -> dict:
 
         games[game_id] = {
             "game_id":    game_id,
+            "season":     safe_int(match_date[:4]) if match_date else SEASON,
             "home_team":  home_m.group(1).strip() if home_m else None,
             "away_team":  away_m.group(1).strip() if away_m else None,
             "home_slug":  home_slug_val,
@@ -488,6 +496,52 @@ def parse_fixtures_html(content: str) -> dict:
             "round":      round_m.group(1) if round_m else None,
             "match_date": match_date,
         }
+
+    return games
+
+def parse_current_game_days(content: str) -> dict:
+    """
+    RugbyPass renders fixture data into a hidden current-game-days JSON element.
+    This is more reliable than parsing fixture cards because the page also
+    contains unrelated sidebar games with overlapping IDs.
+    """
+    m = re.search(
+        r'<div[^>]+id=["\']current-game-days["\'][^>]*>(.*?)</div>',
+        content,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if not m:
+        return {}
+
+    raw_json = html_lib.unescape(m.group(1)).strip()
+    if not raw_json:
+        return {}
+
+    try:
+        game_days = json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        log.warning(f"Could not parse current-game-days JSON: {exc}")
+        return {}
+
+    games = {}
+    for day in game_days:
+        tournaments = day.get("tournaments", []) if isinstance(day, dict) else []
+        if isinstance(tournaments, dict):
+            tournaments = tournaments.values()
+        for tournament in tournaments:
+            if not isinstance(tournament, dict):
+                continue
+            for game in tournament.get("games", []) or []:
+                if not isinstance(game, dict):
+                    continue
+                if game.get("tournamentUri") != TOURNAMENT_URI:
+                    continue
+                info = parse_match_from_dict(game)
+                if not info:
+                    continue
+                if TARGET_SEASONS and info.get("season") not in TARGET_SEASONS:
+                    continue
+                games[info["game_id"]] = info
 
     return games
 
@@ -542,12 +596,20 @@ async def get_game_ids(page, conn=None):
     def merge_candidates(candidates):
         for d in candidates:
             info = parse_match_from_dict(d)
-            if info and info['game_id'] not in games:
+            if (
+                info
+                and info['game_id'] not in games
+                and (not TARGET_SEASONS or info.get("season") in TARGET_SEASONS)
+            ):
                 games[info['game_id']] = info
+
+    games = parse_current_game_days(content)
+    if games:
+        log.info(f"current-game-days: {len(games)} {TOURNAMENT_URI} games")
 
     # ── Primary: __NEXT_DATA__ embedded JSON ──────────────────────────────────
     next_data = parse_next_data(content)
-    if next_data:
+    if not games and next_data:
         candidates = find_all(next_data, is_match_dict)
         log.info(f"__NEXT_DATA__: {len(candidates)} match-like objects")
         merge_candidates(candidates)
@@ -628,6 +690,7 @@ async def get_match_info(page, game_id, prefilled=None, conn=None):
         source_entity_id=game_id,
         source_url=url,
         content=content,
+        source_season=info.get("season"),
     )
 
     # ── Try __NEXT_DATA__ first ────────────────────────────────────────────────
@@ -816,7 +879,7 @@ def extract_stats_from_json(data: dict, side: str) -> dict:
 
     return stats
 
-async def get_match_stats(page, game_id, away_slug="", home_slug="", conn=None):
+async def get_match_stats(page, game_id, away_slug="", home_slug="", conn=None, season=None):
     """
     Load the RugbyPass stats page and extract all match statistics.
     URL format: /live/{away}-vs-{home}/stats/?g={game_id}  (away team is FIRST)
@@ -857,6 +920,7 @@ async def get_match_stats(page, game_id, away_slug="", home_slug="", conn=None):
         source_entity_id=game_id,
         source_url=url,
         content=content,
+        source_season=season,
     )
     stats = {}
 
@@ -969,7 +1033,7 @@ async def get_match_stats(page, game_id, away_slug="", home_slug="", conn=None):
 
     return stats
 
-async def get_player_stats(page, game_id, away_slug="", home_slug="", conn=None):
+async def get_player_stats(page, game_id, away_slug="", home_slug="", conn=None, season=None):
     """
     Scrape RugbyPass NPC player leaderboard rows from the match stats page.
 
@@ -995,6 +1059,7 @@ async def get_player_stats(page, game_id, away_slug="", home_slug="", conn=None)
         source_entity_id=game_id,
         source_url=url,
         content=content,
+        source_season=season,
     )
 
     stat_options = await page.evaluate("""
@@ -1051,6 +1116,7 @@ async def get_player_stats(page, game_id, away_slug="", home_slug="", conn=None)
                 continue
             rows.append({
                 "match_id": game_id,
+                "season": season or SEASON,
                 "category": option["category"],
                 "stat_name": option["name"],
                 "rank": safe_int(row["rank"]),
@@ -1065,7 +1131,8 @@ async def get_player_stats(page, game_id, away_slug="", home_slug="", conn=None)
 
 # ── STEP 4: WRITE TO SQL ──────────────────────────────────────────────────────
 def write_bronze_snapshot(conn, source_entity, source_url, content,
-                          source_entity_id=None, content_type="text/html"):
+                          source_entity_id=None, content_type="text/html",
+                          source_season=None):
     if not conn or not content:
         return
 
@@ -1086,7 +1153,7 @@ def write_bronze_snapshot(conn, source_entity, source_url, content,
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
     """, (
         "RugbyPass", source_url, content_hash,
-        "RugbyPass", COMPETITION_CODE, SEASON, source_entity,
+        "RugbyPass", COMPETITION_CODE, source_season or SEASON, source_entity,
         str(source_entity_id) if source_entity_id is not None else None,
         source_url, content_type, content_hash, content,
     ))
@@ -1096,6 +1163,7 @@ def write_bronze_snapshot(conn, source_entity, source_url, content,
 def write_to_sql(conn, match_info, stats):
     cur = conn.cursor()
     gid = match_info["game_id"]
+    match_season = match_info.get("season") or SEASON
 
     cur.execute(f"""
         MERGE {MATCHES_TABLE} AS t
@@ -1104,7 +1172,7 @@ def write_to_sql(conn, match_info, stats):
             INSERT (MatchID,Season,Round,MatchDate,Venue,HomeTeam,AwayTeam,HomeScore,AwayScore)
             VALUES (?,?,?,?,?,?,?,?,?);
     """, (gid,
-          gid, SEASON,
+          gid, match_season,
           match_info.get("round"),
           match_info.get("match_date"),
           match_info.get("venue"),
@@ -1134,7 +1202,7 @@ def write_to_sql(conn, match_info, stats):
 
         # 41 values — must match UPDATE SET and INSERT VALUES counts exactly
         row = (
-            SEASON, team, ha,
+            match_season, team, ha,
             g("tries"), g("conversions"), g("penalty_goals"), g("drop_goals"),
             match_info.get(f"{side}_score"), match_info.get(f"{opp}_score"),
             g("carries"), g("ball_carries"), g("post_contact_metres"),
@@ -1234,8 +1302,8 @@ def write_player_stats_to_sql(conn, player_stats):
             );
         """, (
             row["match_id"], row["stat_name"], row["team"], row["player_name"],
-            SEASON, row["category"], row["rank"], row["value_raw"], row["value"],
-            row["match_id"], SEASON, row["team"], row["player_name"],
+            row.get("season", SEASON), row["category"], row["rank"], row["value_raw"], row["value"],
+            row["match_id"], row.get("season", SEASON), row["team"], row["player_name"],
             row["category"], row["stat_name"], row["rank"], row["value_raw"],
             row["value"],
         ))
@@ -1305,6 +1373,11 @@ async def main():
                     failed.append(game_id)
                     continue
 
+                if match_info.get("status") != "Result" and not match_info.get("played"):
+                    write_to_sql(conn, match_info, {})
+                    success += 1
+                    continue
+
                 await asyncio.sleep(RATE_LIMIT_SECONDS)
 
                 match_stats = await get_match_stats(
@@ -1312,6 +1385,7 @@ async def main():
                     away_slug=match_info.get("away_slug", ""),
                     home_slug=match_info.get("home_slug", ""),
                     conn=conn,
+                    season=match_info.get("season"),
                 )
                 write_to_sql(conn, match_info, match_stats)
                 player_stats = await get_player_stats(
@@ -1319,6 +1393,7 @@ async def main():
                     away_slug=match_info.get("away_slug", ""),
                     home_slug=match_info.get("home_slug", ""),
                     conn=conn,
+                    season=match_info.get("season"),
                 )
                 write_player_stats_to_sql(conn, player_stats)
                 success += 1

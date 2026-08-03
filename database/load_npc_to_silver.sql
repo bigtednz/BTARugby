@@ -1,13 +1,13 @@
 -- ============================================================
 -- Load current NPC scraper tables into Silver platform tables
 -- Run after platform_schema.sql and scraper.py
+-- Supports every season present in NPC_Matches / NPC_PlayerStats.
 -- ============================================================
 
 USE RugbyAnalytics;
 GO
 
 DECLARE @CompetitionID INT;
-DECLARE @SeasonID INT;
 
 MERGE Silver_Competitions AS t
 USING (
@@ -31,7 +31,12 @@ WHERE CompetitionCode = 'NPC';
 
 MERGE Silver_Seasons AS t
 USING (
-    SELECT @CompetitionID AS CompetitionID, 2026 AS Season, '2026 Hilux NPC' AS SeasonName
+    SELECT DISTINCT
+        @CompetitionID AS CompetitionID,
+        Season,
+        CONCAT(Season, ' Hilux NPC') AS SeasonName
+    FROM NPC_Matches
+    WHERE Season IS NOT NULL
 ) AS s
 ON t.CompetitionID = s.CompetitionID AND t.Season = s.Season
 WHEN MATCHED THEN UPDATE SET SeasonName = s.SeasonName
@@ -40,11 +45,6 @@ WHEN NOT MATCHED THEN INSERT (
 ) VALUES (
     s.CompetitionID, s.Season, s.SeasonName
 );
-
-SELECT @SeasonID = SeasonID
-FROM Silver_Seasons
-WHERE CompetitionID = @CompetitionID
-  AND Season = 2026;
 
 MERGE Silver_Teams AS t
 USING (
@@ -72,7 +72,7 @@ MERGE Silver_Matches AS t
 USING (
     SELECT
         m.MatchID,
-        @SeasonID AS SeasonID,
+        ss.SeasonID,
         m.Round AS RoundName,
         m.MatchDate,
         v.VenueID,
@@ -85,8 +85,17 @@ USING (
             ELSE 'Completed'
         END AS MatchStatus,
         'RugbyPass' AS SourceSystem,
-        CONCAT('https://www.rugbypass.com/live/', LOWER(REPLACE(REPLACE(REPLACE(m.AwayTeam, '''', ''), '.', ''), ' ', '-')), '-vs-', LOWER(REPLACE(REPLACE(REPLACE(m.HomeTeam, '''', ''), '.', ''), ' ', '-')), '/') AS SourceURL
+        CONCAT(
+            'https://www.rugbypass.com/live/',
+            LOWER(REPLACE(REPLACE(REPLACE(m.AwayTeam, '''', ''), '.', ''), ' ', '-')),
+            '-vs-',
+            LOWER(REPLACE(REPLACE(REPLACE(m.HomeTeam, '''', ''), '.', ''), ' ', '-')),
+            '/'
+        ) AS SourceURL
     FROM NPC_Matches m
+    JOIN Silver_Seasons ss
+        ON ss.CompetitionID = @CompetitionID
+       AND ss.Season = m.Season
     JOIN Silver_Teams ht ON m.HomeTeam = ht.TeamName
     JOIN Silver_Teams at ON m.AwayTeam = at.TeamName
     LEFT JOIN Silver_Venues v ON m.Venue = v.VenueName

@@ -35,6 +35,7 @@ The current competition config is:
 
 ```python
 SEASON = 2026
+TARGET_SEASONS = [2023, 2024, 2025, 2026]
 COMPETITION_CODE = "NPC"
 TOURNAMENT_URI = "bunnings-npc"
 ```
@@ -48,7 +49,7 @@ python scraper.py
 ## What It Does
 
 1. Opens the RugbyPass Hilux NPC fixtures page.
-2. Extracts game IDs and match metadata.
+2. Extracts game IDs and match metadata from RugbyPass's hidden `current-game-days` JSON.
 3. Visits each match stats page.
 4. Parses player leaderboard rows into a separate player-stat table.
 5. Captures raw RugbyPass page HTML into `Bronze_SourceSnapshots`.
@@ -70,6 +71,8 @@ python scraper.py
 For NPC, RugbyPass exposes player leaderboards on the match stats page. These rows are stored separately in `NPC_PlayerStats` so player rankings are not mixed into team totals.
 
 After scraping, run `../../database/load_npc_to_silver.sql` to load the current NPC data into the platform's normalised Silver tables.
+
+The scraper infers each match season from `MatchDate`, so historical backfills can load multiple seasons into the same NPC tables without stamping everything as the current config season.
 
 ## Stats Captured
 
