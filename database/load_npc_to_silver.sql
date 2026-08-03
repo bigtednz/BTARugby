@@ -127,6 +127,10 @@ USING (
     SELECT DISTINCT PlayerName
     FROM NPC_PlayerStats
     WHERE PlayerName IS NOT NULL
+    UNION
+    SELECT DISTINCT PlayerName
+    FROM NPC_PlayerAppearances
+    WHERE PlayerName IS NOT NULL
 ) AS s
 ON t.PlayerName = s.PlayerName
 WHEN NOT MATCHED THEN INSERT (PlayerName)
@@ -165,6 +169,41 @@ WHEN NOT MATCHED THEN INSERT (
 ) VALUES (
     s.MatchID, s.TeamID, s.PlayerID, s.StatCategory, s.StatName, s.Rank,
     s.StatValue, s.StatValueRaw, s.SourceSystem
+);
+
+MERGE Silver_PlayerAppearances AS t
+USING (
+    SELECT
+        pa.MatchID,
+        tm.TeamID,
+        p.PlayerID,
+        pa.JerseyNumber,
+        pa.IsStarter,
+        pa.IsSubstitute,
+        pa.SubOnMinute,
+        pa.SubOffMinute,
+        'RugbyPass' AS SourceSystem
+    FROM NPC_PlayerAppearances pa
+    JOIN Silver_Players p ON pa.PlayerName = p.PlayerName
+    LEFT JOIN Silver_Teams tm ON pa.Team = tm.TeamName
+) AS s
+ON t.MatchID = s.MatchID
+   AND t.TeamID = s.TeamID
+   AND t.PlayerID = s.PlayerID
+WHEN MATCHED THEN UPDATE SET
+    JerseyNumber = s.JerseyNumber,
+    IsStarter = s.IsStarter,
+    IsSubstitute = s.IsSubstitute,
+    SubOnMinute = s.SubOnMinute,
+    SubOffMinute = s.SubOffMinute,
+    SourceSystem = s.SourceSystem,
+    UpdatedAt = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (
+    MatchID, TeamID, PlayerID, JerseyNumber, IsStarter, IsSubstitute,
+    SubOnMinute, SubOffMinute, SourceSystem
+) VALUES (
+    s.MatchID, s.TeamID, s.PlayerID, s.JerseyNumber, s.IsStarter,
+    s.IsSubstitute, s.SubOnMinute, s.SubOffMinute, s.SourceSystem
 );
 GO
 

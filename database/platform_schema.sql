@@ -149,6 +149,23 @@ CREATE TABLE Silver_PlayerMatchStats (
 );
 GO
 
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Silver_PlayerAppearances')
+CREATE TABLE Silver_PlayerAppearances (
+    PlayerAppearanceID BIGINT IDENTITY PRIMARY KEY,
+    MatchID            INT NOT NULL REFERENCES Silver_Matches(MatchID),
+    TeamID             INT NULL REFERENCES Silver_Teams(TeamID),
+    PlayerID           INT NOT NULL REFERENCES Silver_Players(PlayerID),
+    JerseyNumber       INT NULL,
+    IsStarter          BIT NOT NULL,
+    IsSubstitute       BIT NOT NULL,
+    SubOnMinute        INT NULL,
+    SubOffMinute       INT NULL,
+    SourceSystem       VARCHAR(50) NULL,
+    UpdatedAt          DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT UQ_Silver_PlayerAppearances UNIQUE (MatchID, TeamID, PlayerID)
+);
+GO
+
 -- ============================================================
 -- Gold: features, predictions, and backtests
 -- ============================================================

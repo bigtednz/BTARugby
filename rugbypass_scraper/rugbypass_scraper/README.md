@@ -62,13 +62,14 @@ python scraper.py
 | `NPC_Matches` | One row per match with teams, score, venue, and date |
 | `NPC_TeamStats` | Team totals only when RugbyPass exposes true team-stat JSON |
 | `NPC_PlayerStats` | Ranked player leaderboard rows from the RugbyPass match stats page |
+| `NPC_PlayerAppearances` | Full team-sheet appearances, including starters, substitutes, and sub minutes |
 
 | View | Use |
 | --- | --- |
 | `vw_MatchResults` | Match results with winner and margin |
 | `vw_TeamPerformance` | Team-level match stats with derived metrics |
 
-For NPC, RugbyPass exposes player leaderboards on the match stats page. These rows are stored separately in `NPC_PlayerStats` so player rankings are not mixed into team totals.
+For NPC, RugbyPass exposes player leaderboards on the match stats page. These rows are stored separately in `NPC_PlayerStats` so player rankings are not mixed into team totals. Full matchday squads are stored separately in `NPC_PlayerAppearances`.
 
 After scraping, run `../../database/load_npc_to_silver.sql` to load the current NPC data into the platform's normalised Silver tables.
 

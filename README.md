@@ -26,8 +26,9 @@ It currently populates:
 - `NPC_Matches`
 - `NPC_TeamStats`
 - `NPC_PlayerStats`
+- `NPC_PlayerAppearances`
 
-NPC player leaderboard rows are kept separate from team totals to avoid cross-pollinating player rankings with team match statistics.
+NPC player leaderboard rows and team-sheet appearances are kept separate from team totals to avoid cross-pollinating player rankings with team match statistics.
 
 ## Database Scripts
 

@@ -36,8 +36,10 @@ FIXTURES_URL     = f"{BASE_URL}/{TOURNAMENT_URI}/fixtures-results/"
 MATCHES_TABLE    = f"{COMPETITION_CODE}_Matches"
 STATS_TABLE      = f"{COMPETITION_CODE}_TeamStats"
 PLAYER_STATS_TABLE = f"{COMPETITION_CODE}_PlayerStats"
+PLAYER_APPEARANCES_TABLE = f"{COMPETITION_CODE}_PlayerAppearances"
 MATCH_TEAM_UQ    = f"UQ_{COMPETITION_CODE}_MatchTeam"
 PLAYER_STAT_UQ   = f"UQ_{COMPETITION_CODE}_PlayerStat"
+PLAYER_APPEARANCE_UQ = f"UQ_{COMPETITION_CODE}_PlayerAppearance"
 MIN_GAME_ID      = 100_000
 MAX_GAME_ID      = 9_999_999
 TEAM_SLUG_OVERRIDES = {
@@ -161,6 +163,24 @@ CREATE TABLE {PLAYER_STATS_TABLE} (
     StatValue      DECIMAL(10,2),
     ScrapedAt      DATETIME DEFAULT GETDATE(),
     CONSTRAINT {PLAYER_STAT_UQ} UNIQUE (MatchID, StatName, Team, PlayerName)
+)
+"""
+
+DDL_PLAYER_APPEARANCES = f"""
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = '{PLAYER_APPEARANCES_TABLE}')
+CREATE TABLE {PLAYER_APPEARANCES_TABLE} (
+    PlayerAppearanceID INT IDENTITY PRIMARY KEY,
+    MatchID            INT REFERENCES {MATCHES_TABLE}(MatchID),
+    Season             INT,
+    Team               VARCHAR(50),
+    PlayerName         VARCHAR(100),
+    JerseyNumber       INT,
+    IsStarter          BIT,
+    IsSubstitute       BIT,
+    SubOnMinute        INT NULL,
+    SubOffMinute       INT NULL,
+    ScrapedAt          DATETIME DEFAULT GETDATE(),
+    CONSTRAINT {PLAYER_APPEARANCE_UQ} UNIQUE (MatchID, Team, PlayerName)
 )
 """
 
@@ -1129,6 +1149,75 @@ async def get_player_stats(page, game_id, away_slug="", home_slug="", conn=None,
     log.info(f"  Parsed {len(rows)} player stat rows")
     return rows
 
+async def get_player_appearances(page, game_id, away_slug="", home_slug="", conn=None, season=None):
+    if away_slug and home_slug:
+        url = f"{BASE_URL}/live/{away_slug}-vs-{home_slug}/teams/?g={game_id}"
+    else:
+        url = f"{BASE_URL}/live/teams/?g={game_id}"
+
+    log.info(f"  Team sheets URL: {url}")
+    response = await page.goto(url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT)
+    if response and response.status >= 500 and away_slug and home_slug:
+        url = f"{BASE_URL}/live/{away_slug}-vs-{home_slug}/teams/"
+        log.info(f"  Retrying team sheets URL without game ID: {url}")
+        await page.goto(url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT)
+    await page.wait_for_timeout(3000)
+    content = await page.content()
+    write_bronze_snapshot(
+        conn,
+        source_entity="team-sheets",
+        source_entity_id=game_id,
+        source_url=url,
+        content=content,
+        source_season=season,
+    )
+
+    rows = await page.locator("section.team-field.team-events").evaluate_all("""
+        sections => sections.flatMap(section => {
+            const team = (section.querySelector('h2')?.innerText || '').trim();
+            const out = [];
+            let isSubstitute = false;
+            for (const el of section.querySelectorAll('h3, .players > .player')) {
+                if (el.tagName === 'H3') {
+                    isSubstitute = /substitutes/i.test(el.innerText || '');
+                    continue;
+                }
+                const playerName = (el.querySelector('.name')?.innerText || '').trim();
+                if (!team || !playerName) continue;
+                const jerseyNumber = (el.querySelector('.num')?.innerText || '').trim();
+                const onMinute = (el.querySelector('.on')?.innerText || '').trim();
+                const offMinute = (el.querySelector('.off')?.innerText || '').trim();
+                out.push({
+                    team,
+                    player_name: playerName,
+                    jersey_number: jerseyNumber,
+                    is_starter: !isSubstitute,
+                    is_substitute: isSubstitute,
+                    sub_on_minute: onMinute,
+                    sub_off_minute: offMinute
+                });
+            }
+            return out;
+        })
+    """)
+
+    appearances = []
+    for row in rows:
+        appearances.append({
+            "match_id": game_id,
+            "season": season or SEASON,
+            "team": row["team"],
+            "player_name": row["player_name"],
+            "jersey_number": safe_int(row["jersey_number"]),
+            "is_starter": 1 if row["is_starter"] else 0,
+            "is_substitute": 1 if row["is_substitute"] else 0,
+            "sub_on_minute": safe_int(str(row["sub_on_minute"]).replace("'", "")),
+            "sub_off_minute": safe_int(str(row["sub_off_minute"]).replace("'", "")),
+        })
+
+    log.info(f"  Parsed {len(appearances)} player appearances")
+    return appearances
+
 # ── STEP 4: WRITE TO SQL ──────────────────────────────────────────────────────
 def write_bronze_snapshot(conn, source_entity, source_url, content,
                           source_entity_id=None, content_type="text/html",
@@ -1311,6 +1400,46 @@ def write_player_stats_to_sql(conn, player_stats):
     conn.commit()
     log.info(f"  Saved {len(player_stats)} player stat rows")
 
+def write_player_appearances_to_sql(conn, appearances):
+    if not appearances:
+        return
+
+    cur = conn.cursor()
+    for row in appearances:
+        cur.execute(f"""
+            MERGE {PLAYER_APPEARANCES_TABLE} AS t
+            USING (
+                SELECT ? AS MatchID, ? AS Team, ? AS PlayerName
+            ) AS s
+                ON t.MatchID = s.MatchID
+               AND t.Team = s.Team
+               AND t.PlayerName = s.PlayerName
+            WHEN MATCHED THEN UPDATE SET
+                Season=?,
+                JerseyNumber=?,
+                IsStarter=?,
+                IsSubstitute=?,
+                SubOnMinute=?,
+                SubOffMinute=?,
+                ScrapedAt=GETDATE()
+            WHEN NOT MATCHED THEN INSERT (
+                MatchID,Season,Team,PlayerName,JerseyNumber,IsStarter,
+                IsSubstitute,SubOnMinute,SubOffMinute
+            ) VALUES (
+                ?,?,?,?,?,?,?,?,?
+            );
+        """, (
+            row["match_id"], row["team"], row["player_name"],
+            row.get("season", SEASON), row["jersey_number"], row["is_starter"],
+            row["is_substitute"], row["sub_on_minute"], row["sub_off_minute"],
+            row["match_id"], row.get("season", SEASON), row["team"],
+            row["player_name"], row["jersey_number"], row["is_starter"],
+            row["is_substitute"], row["sub_on_minute"], row["sub_off_minute"],
+        ))
+
+    conn.commit()
+    log.info(f"  Saved {len(appearances)} player appearance rows")
+
 async def main():
     log.info(f"=== RugbyPass {COMPETITION_NAME} {SEASON} Scraper ===")
 
@@ -1322,6 +1451,7 @@ async def main():
         cur.execute(DDL_MATCHES)
         cur.execute(DDL_STATS)
         cur.execute(DDL_PLAYER_STATS)
+        cur.execute(DDL_PLAYER_APPEARANCES)
         cur.execute(DDL_ALTER)
         cur.execute(DDL_VIEWS)
         cur.execute(DDL_VIEW2)
@@ -1362,7 +1492,12 @@ async def main():
                 cur.execute(
                     f"SELECT COUNT(*) FROM {PLAYER_STATS_TABLE} WHERE MatchID = ?", game_id
                 )
-                if cur.fetchone()[0] > 0:
+                player_stat_count = cur.fetchone()[0]
+                cur.execute(
+                    f"SELECT COUNT(*) FROM {PLAYER_APPEARANCES_TABLE} WHERE MatchID = ?", game_id
+                )
+                appearance_count = cur.fetchone()[0]
+                if player_stat_count > 0 and appearance_count > 0:
                     log.info("  → Already in DB, skipping")
                     continue
 
@@ -1396,6 +1531,14 @@ async def main():
                     season=match_info.get("season"),
                 )
                 write_player_stats_to_sql(conn, player_stats)
+                appearances = await get_player_appearances(
+                    page, game_id,
+                    away_slug=match_info.get("away_slug", ""),
+                    home_slug=match_info.get("home_slug", ""),
+                    conn=conn,
+                    season=match_info.get("season"),
+                )
+                write_player_appearances_to_sql(conn, appearances)
                 success += 1
 
             except Exception as e:
