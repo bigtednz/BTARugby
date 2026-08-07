@@ -1,8 +1,9 @@
 """
-Production Predictions and Reporting Layer v0.4.0.
+Production Predictions and Reporting Layer v0.5.1.
 
-This command promotes the validated Elo-only champion into auditable production
-predictions for scheduled NPC fixtures. It does not train or promote new models.
+This command reads the active probability and margin champions from the deployment
+registry and produces auditable predictions for scheduled NPC fixtures. It does not
+train, promote, or change model deployment status.
 """
 
 from __future__ import annotations
@@ -23,13 +24,9 @@ except ModuleNotFoundError:  # Direct script execution: python analytics\run_pro
     from kickoff_times import auckland_date_from_utc, local_to_utc
 
 
-PROCESS_NAME = "ProductionPredictions_v0.4.0"
+PROCESS_NAME = "ProductionPredictions_v0.5.1"
 PROBABILITY_TARGET = "win_probability"
 MARGIN_TARGET = "margin"
-CHAMPION_MODEL_NAME = "EloOnlyBaseline"
-CHAMPION_MODEL_VERSION = "v0.2.0"
-RIDGE_MODEL_NAME = "RidgeMarginModel"
-RIDGE_MODEL_VERSION = "v0.3.0"
 CONFIDENCE_BANDS = (
     ("Low", 0.0, 0.60),
     ("Moderate", 0.60, 0.70),
@@ -213,100 +210,6 @@ def load_production_matches(cursor) -> list[ProductionMatch]:
     ]
 
 
-def model_version_id(cursor, model_name: str, model_version: str) -> int:
-    row = cursor.execute(
-        """
-        SELECT ModelVersionID FROM Gold_ModelVersions
-        WHERE ModelName = ? AND ModelVersion = ? AND TargetName = ?
-        """,
-        model_name,
-        model_version,
-        base.TARGET_NAME,
-    ).fetchone()
-    if row is None:
-        raise RuntimeError(f"Model version not found: {model_name} {model_version}")
-    return int(row.ModelVersionID)
-
-
-def register_deployment(cursor, target_type: str, model_version_id_value: int, status: str, active: bool, reason: str, evidence: str) -> None:
-    if active:
-        cursor.execute(
-            """
-            UPDATE Gold_ModelDeploymentStatus
-            SET IsActive = 0, EffectiveTo = COALESCE(EffectiveTo, SYSUTCDATETIME())
-            WHERE TargetType = ? AND IsActive = 1 AND ModelVersionID <> ?
-            """,
-            target_type,
-            model_version_id_value,
-        )
-    cursor.execute(
-        """
-        MERGE Gold_ModelDeploymentStatus AS t
-        USING (SELECT ? AS TargetType, ? AS ModelVersionID, ? AS DeploymentStatus) AS s
-        ON t.TargetType = s.TargetType
-           AND t.ModelVersionID = s.ModelVersionID
-           AND t.DeploymentStatus = s.DeploymentStatus
-        WHEN MATCHED THEN UPDATE SET
-            IsActive = ?,
-            EffectiveTo = CASE WHEN ? = 1 THEN NULL ELSE COALESCE(t.EffectiveTo, SYSUTCDATETIME()) END,
-            SelectionReason = ?,
-            EvaluationEvidence = ?,
-            SelectedAt = SYSUTCDATETIME()
-        WHEN NOT MATCHED THEN INSERT (
-            TargetType, ModelVersionID, DeploymentStatus, IsActive,
-            SelectionReason, EvaluationEvidence
-        ) VALUES (?, ?, ?, ?, ?, ?);
-        """,
-        (
-            target_type,
-            model_version_id_value,
-            status,
-            1 if active else 0,
-            1 if active else 0,
-            reason,
-            evidence,
-            target_type,
-            model_version_id_value,
-            status,
-            1 if active else 0,
-            reason,
-            evidence,
-        ),
-    )
-
-
-def register_default_champions(cursor) -> None:
-    elo_id = model_version_id(cursor, CHAMPION_MODEL_NAME, CHAMPION_MODEL_VERSION)
-    ridge_id = model_version_id(cursor, RIDGE_MODEL_NAME, RIDGE_MODEL_VERSION)
-    register_deployment(
-        cursor,
-        PROBABILITY_TARGET,
-        elo_id,
-        "Champion",
-        True,
-        "EloOnlyBaseline v0.2.0 is the validated active champion for win probability.",
-        "Best current probability benchmark across complete 2023-2025 walk-forward seasons.",
-    )
-    register_deployment(
-        cursor,
-        MARGIN_TARGET,
-        elo_id,
-        "Champion",
-        True,
-        "EloOnlyBaseline v0.2.0 remains the margin incumbent until a better model is validated.",
-        "RidgeMarginModel v0.3.0 failed champion criteria; Elo-only weighted MAE 12.81 versus ridge 13.56.",
-    )
-    register_deployment(
-        cursor,
-        MARGIN_TARGET,
-        ridge_id,
-        "Rejected",
-        False,
-        "RidgeMarginModel v0.3.0 was rejected for margin champion promotion.",
-        "Complete-season weighted MAE 13.56; beat Elo-only in 0/3 complete seasons.",
-    )
-
-
 def resolve_active_champions(cursor) -> dict[str, Champion]:
     rows = cursor.execute(
         """
@@ -398,6 +301,29 @@ def quality_issue(match: ProductionMatch | None, code: str, severity: str, messa
     }
 
 
+def make_champion_prediction(
+    champion: Champion,
+    match: base.Match,
+    state: base.ModelState,
+    summary: dict,
+):
+    """Run the model recorded as active champion, or fail rather than mislabel output."""
+    supported_models = set(base.MODEL_NAMES)
+    if champion.model_name not in supported_models:
+        raise RuntimeError(
+            f"Active {champion.target_type} champion is not supported by the production "
+            f"prediction engine: {champion.model_name} {champion.model_version}. "
+            "Add an explicit production adapter before deploying this model."
+        )
+    if champion.model_version != base.MODEL_VERSION:
+        raise RuntimeError(
+            f"Active {champion.target_type} champion version does not match the loaded "
+            f"baseline implementation: registry={champion.model_name} {champion.model_version}; "
+            f"loaded={base.MODEL_VERSION}. Refusing to generate mislabeled predictions."
+        )
+    return base.make_prediction(champion.model_name, match, state, summary, match.season)
+
+
 def build_prediction(
     production_match: ProductionMatch,
     all_matches: list[base.Match],
@@ -408,7 +334,20 @@ def build_prediction(
     match = production_match.match
     state = build_state_before_match(all_matches, match)
     summary = base.training_summary([m for m in all_matches if m.match_status == "Completed" and m.match_date < match.match_date])
-    prediction = base.make_prediction(CHAMPION_MODEL_NAME, match, state, summary, match.season)
+
+    probability_champion = champions[PROBABILITY_TARGET]
+    margin_champion = champions[MARGIN_TARGET]
+    probability_prediction = make_champion_prediction(probability_champion, match, state, summary)
+
+    if (
+        margin_champion.model_version_id == probability_champion.model_version_id
+        and margin_champion.model_name == probability_champion.model_name
+        and margin_champion.model_version == probability_champion.model_version
+    ):
+        margin_prediction = probability_prediction
+    else:
+        margin_prediction = make_champion_prediction(margin_champion, match, state, summary)
+
     home_elo = state.ratings[match.home_team_id]
     away_elo = state.ratings[match.away_team_id]
     raw_diff = home_elo - away_elo
@@ -416,7 +355,7 @@ def build_prediction(
     home_roll = base.average(state.rolling_margins[match.home_team_id])
     away_roll = base.average(state.rolling_margins[match.away_team_id])
     cutoff = base.feature_cutoff_date(state, match)
-    issues = data_quality_issues_for_prediction(production_match, prediction, cutoff, home_elo, away_elo)
+    issues = data_quality_issues_for_prediction(production_match, probability_prediction, margin_prediction.predicted_margin, cutoff, home_elo, away_elo)
     home_sheet = (match.match_id, match.home_team_id) in sheets
     away_sheet = (match.match_id, match.away_team_id) in sheets
     if not home_sheet or not away_sheet:
@@ -428,22 +367,22 @@ def build_prediction(
     status = "Critical" if any(issue["severity"] == "Critical" for issue in issues) else "Warning" if issues else "OK"
     return ProductionPrediction(
         match=production_match,
-        probability_champion=champions[PROBABILITY_TARGET],
-        margin_champion=champions[MARGIN_TARGET],
+        probability_champion=probability_champion,
+        margin_champion=margin_champion,
         generated_at=generated_at,
         feature_cutoff_date=cutoff,
-        home_win_probability=prediction.home_win_probability,
-        draw_probability=prediction.draw_probability,
-        away_win_probability=prediction.away_win_probability,
-        predicted_home_margin=prediction.predicted_margin,
-        predicted_winner=predicted_winner(prediction.home_win_probability, prediction.draw_probability, prediction.away_win_probability),
-        confidence_level=confidence_level(prediction.home_win_probability, prediction.draw_probability, prediction.away_win_probability),
+        home_win_probability=probability_prediction.home_win_probability,
+        draw_probability=probability_prediction.draw_probability,
+        away_win_probability=probability_prediction.away_win_probability,
+        predicted_home_margin=margin_prediction.predicted_margin,
+        predicted_winner=predicted_winner(probability_prediction.home_win_probability, probability_prediction.draw_probability, probability_prediction.away_win_probability),
+        confidence_level=confidence_level(probability_prediction.home_win_probability, probability_prediction.draw_probability, probability_prediction.away_win_probability),
         home_pre_match_elo=home_elo,
         away_pre_match_elo=away_elo,
         raw_elo_difference=raw_diff,
         home_advantage_adjustment=base.HOME_ADVANTAGE,
         adjusted_elo_difference=adjusted_diff,
-        probability_contribution=prediction.home_win_probability - 0.5,
+        probability_contribution=probability_prediction.home_win_probability - 0.5,
         home_prior_matches=home_prior,
         away_prior_matches=away_prior,
         home_rolling_margin=home_roll,
@@ -457,7 +396,7 @@ def build_prediction(
     )
 
 
-def data_quality_issues_for_prediction(production_match: ProductionMatch, prediction: base.Prediction, cutoff: object | None, home_elo: float, away_elo: float) -> list[dict]:
+def data_quality_issues_for_prediction(production_match: ProductionMatch, probability_prediction: base.Prediction, predicted_margin: float, cutoff: object | None, home_elo: float, away_elo: float) -> list[dict]:
     match = production_match.match
     issues = []
     if match.match_status != "Scheduled":
@@ -466,8 +405,10 @@ def data_quality_issues_for_prediction(production_match: ProductionMatch, predic
         issues.append(quality_issue(production_match, "MISSING_TEAM_IDENTITY", "Critical", "Home or away team identity is missing.", True))
     if home_elo is None or away_elo is None:
         issues.append(quality_issue(production_match, "MISSING_ELO", "Critical", "Pre-match Elo is missing or invalid.", True))
-    if not validate_probability_sum(prediction.home_win_probability, prediction.draw_probability, prediction.away_win_probability):
+    if not validate_probability_sum(probability_prediction.home_win_probability, probability_prediction.draw_probability, probability_prediction.away_win_probability):
         issues.append(quality_issue(production_match, "INVALID_PROBABILITIES", "Critical", "Probabilities are outside 0-1 or do not sum to one.", True))
+    if predicted_margin != predicted_margin or abs(predicted_margin) > 1000:
+        issues.append(quality_issue(production_match, "INVALID_MARGIN", "Critical", "Predicted margin is missing, non-finite, or implausibly large.", True))
     if cutoff is not None and match.match_date is not None and cutoff >= match.match_date:
         issues.append(quality_issue(production_match, "FEATURE_CUTOFF_LEAKAGE", "Critical", "Feature cutoff is at or after kickoff date.", True))
     if production_match.kickoff_time_known and (
@@ -630,7 +571,7 @@ def insert_issue(cursor, issue: dict) -> None:
     )
 
 
-def start_pipeline_run(cursor) -> int:
+def start_pipeline_run(cursor, champions: dict[str, Champion]) -> int:
     cursor.execute(
         """
         INSERT INTO Gold_PipelineRuns (ProcessName, Status, ModelVersion)
@@ -638,7 +579,10 @@ def start_pipeline_run(cursor) -> int:
         VALUES (?, 'Running', ?)
         """,
         PROCESS_NAME,
-        f"{CHAMPION_MODEL_NAME} {CHAMPION_MODEL_VERSION}",
+        (
+            f"P:{champions[PROBABILITY_TARGET].model_name} {champions[PROBABILITY_TARGET].model_version}; "
+            f"M:{champions[MARGIN_TARGET].model_name} {champions[MARGIN_TARGET].model_version}"
+        ),
     )
     return int(cursor.fetchone()[0])
 
@@ -666,6 +610,55 @@ def finish_pipeline_run(cursor, run_id: int, status: str, records_read: int, rec
     )
 
 
+def print_prediction_details(predictions: list[ProductionPrediction]) -> None:
+    if not predictions:
+        print("No predictions to display.")
+        return
+
+    for prediction in predictions:
+        match = prediction.match.match
+        print("")
+        print(f"MatchID: {match.match_id}")
+        print(f"Fixture: {match.home_team} v {match.away_team}")
+        if prediction.match.kickoff_datetime_local is not None:
+            print(f"Kickoff local: {prediction.match.kickoff_datetime_local}")
+        elif match.match_date is not None:
+            print(f"Match date: {match.match_date}")
+        print(
+            "Probabilities: "
+            f"Home={prediction.home_win_probability:.6f} "
+            f"Draw={prediction.draw_probability:.6f} "
+            f"Away={prediction.away_win_probability:.6f}"
+        )
+        print(f"Predicted home margin: {prediction.predicted_home_margin:.3f}")
+        print(f"Predicted winner: {prediction.predicted_winner}")
+        print(f"Confidence: {prediction.confidence_level}")
+        print(
+            "Probability champion: "
+            f"{prediction.probability_champion.model_name} "
+            f"{prediction.probability_champion.model_version} "
+            f"(ModelVersionID={prediction.probability_champion.model_version_id})"
+        )
+        print(
+            "Margin champion: "
+            f"{prediction.margin_champion.model_name} "
+            f"{prediction.margin_champion.model_version} "
+            f"(ModelVersionID={prediction.margin_champion.model_version_id})"
+        )
+        print(
+            "Elo: "
+            f"home={prediction.home_pre_match_elo:.3f} "
+            f"away={prediction.away_pre_match_elo:.3f} "
+            f"adjusted_diff={prediction.adjusted_elo_difference:.3f}"
+        )
+        print(f"Data quality: {prediction.data_quality_status}")
+        if prediction.issues:
+            issue_text = "; ".join(
+                f"{issue['severity']}:{issue['issue_code']}" for issue in prediction.issues
+            )
+            print(f"Issues: {issue_text}")
+
+
 def run(args: argparse.Namespace) -> None:
     if base.pyodbc is None:
         raise RuntimeError("pyodbc is required for database execution")
@@ -673,12 +666,12 @@ def run(args: argparse.Namespace) -> None:
     cursor = conn.cursor()
     generated_at = datetime.now(UTC).replace(tzinfo=None)
     run_id = None
-    if not args.dry_run:
-        run_id = start_pipeline_run(cursor)
-        conn.commit()
     try:
-        register_default_champions(cursor)
         champions = resolve_active_champions(cursor)
+        if not args.dry_run:
+            run_id = start_pipeline_run(cursor, champions)
+            conn.commit()
+
         production_matches = load_production_matches(cursor)
         all_matches = [m.match for m in production_matches]
         sheets = team_sheet_availability(cursor)
@@ -702,6 +695,8 @@ def run(args: argparse.Namespace) -> None:
         print(f"Active margin incumbent: {champions[MARGIN_TARGET].model_name} {champions[MARGIN_TARGET].model_version}")
         print(f"Eligible scheduled fixtures: {len(eligible)}")
         print(f"Warnings: {warnings}; critical errors: {errors}")
+        if args.show_predictions:
+            print_prediction_details(predictions)
         if args.dry_run:
             print("Dry run: no database writes will be made.")
             conn.rollback()
@@ -739,11 +734,16 @@ def run(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run production NPC predictions v0.4.0")
+    parser = argparse.ArgumentParser(description="Run production NPC predictions v0.5.1")
     parser.add_argument("--dry-run", action="store_true", help="Calculate without database writes")
     parser.add_argument("--replace", action="store_true", help="Replace existing production predictions for the same match/champion versions")
     parser.add_argument("--season", type=int, default=None, help="Only predict scheduled matches in this season")
     parser.add_argument("--match-id", type=int, default=None, help="Only predict one scheduled match")
+    parser.add_argument(
+        "--show-predictions",
+        action="store_true",
+        help="Print generated prediction details before any database write",
+    )
     return parser
 
 
