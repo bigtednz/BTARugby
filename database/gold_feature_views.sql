@@ -45,6 +45,8 @@ CROSS APPLY (
         (m.AwayTeamID, at.TeamName, m.HomeTeamID, ht.TeamName, 'A', m.AwayScore, m.HomeScore)
 ) AS x(TeamID, TeamName, OpponentTeamID, OpponentTeamName, HomeAway, PointsFor, PointsAgainst)
 WHERE m.MatchStatus = 'Completed'
+  AND m.ResultReadyFlag = 1
+  AND m.ScoreStatus = 'Confirmed'
   AND m.HomeScore IS NOT NULL
   AND m.AwayScore IS NOT NULL;
 GO

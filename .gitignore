@@ -6,5 +6,8 @@ __pycache__/
 .claude/
 .agents/
 
+.env
+
 debug_html/
 fixtures_debug.html
+webapp-dev.*.log

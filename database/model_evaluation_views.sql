@@ -309,6 +309,9 @@ SELECT
     at.TeamID AS AwayTeamID,
     at.TeamName AS AwayTeam,
     m.MatchStatus,
+    m.ScoreStatus,
+    m.ResultReadyFlag,
+    m.ResultValidationStatus,
     pp.HomeWinProbability,
     pp.DrawProbability,
     pp.AwayWinProbability,
@@ -336,6 +339,7 @@ LEFT JOIN Silver_Venues v ON v.VenueID = m.VenueID
 JOIN Gold_ModelVersions pm ON pm.ModelVersionID = pp.ProbabilityModelVersionID
 JOIN Gold_ModelVersions mm ON mm.ModelVersionID = pp.MarginModelVersionID
 WHERE m.MatchStatus = 'Scheduled'
+  AND COALESCE(m.ResultReadyFlag, 0) = 0
   AND pp.DataQualityStatus <> 'Critical';
 GO
 
@@ -461,6 +465,229 @@ SELECT
     ModelVersion,
     ErrorSummary
 FROM Gold_PipelineRuns;
+GO
+
+CREATE OR ALTER VIEW vw_Gold_FinalPreMatchProductionPrediction AS
+WITH candidates AS (
+    SELECT
+        pp.ProductionPredictionID,
+        CAST(NULL AS BIGINT) AS ProductionPredictionHistoryID,
+        pp.MatchID,
+        pp.ProbabilityModelVersionID,
+        pp.MarginModelVersionID,
+        pp.PredictionGeneratedAt,
+        pp.FeatureCutoffDate,
+        pp.HomeWinProbability,
+        pp.DrawProbability,
+        pp.AwayWinProbability,
+        pp.PredictedHomeMargin,
+        pp.PredictedWinner,
+        pp.ConfidenceLevel,
+        pp.DataQualityStatus,
+        pp.CreatedAt
+    FROM Gold_ProductionPredictions pp
+    UNION ALL
+    SELECT
+        h.ProductionPredictionID,
+        h.ProductionPredictionHistoryID,
+        h.MatchID,
+        h.ProbabilityModelVersionID,
+        h.MarginModelVersionID,
+        h.PredictionGeneratedAt,
+        h.FeatureCutoffDate,
+        h.HomeWinProbability,
+        h.DrawProbability,
+        h.AwayWinProbability,
+        h.PredictedHomeMargin,
+        h.PredictedWinner,
+        h.ConfidenceLevel,
+        h.DataQualityStatus,
+        h.CreatedAt
+    FROM Gold_ProductionPredictionHistory h
+),
+ranked AS (
+    SELECT
+        c.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY c.MatchID
+            ORDER BY c.PredictionGeneratedAt DESC, COALESCE(c.ProductionPredictionID, c.ProductionPredictionHistoryID, 0) DESC
+        ) AS FinalPredictionRank
+    FROM candidates c
+    JOIN Silver_Matches m ON m.MatchID = c.MatchID
+    WHERE c.DataQualityStatus <> 'Critical'
+      AND (
+          (m.KickoffDateTimeUTC IS NOT NULL AND c.PredictionGeneratedAt < m.KickoffDateTimeUTC)
+          OR (m.KickoffDateTimeUTC IS NULL AND m.MatchDate IS NOT NULL AND CAST(c.PredictionGeneratedAt AS DATE) < m.MatchDate)
+          OR (m.KickoffDateTimeUTC IS NULL AND m.MatchDate IS NULL)
+      )
+)
+SELECT *
+FROM ranked
+WHERE FinalPredictionRank = 1;
+GO
+
+CREATE OR ALTER VIEW vw_Gold_ProductionResults AS
+SELECT
+    c.CompetitionCode,
+    s.Season,
+    m.MatchID,
+    m.MatchDate,
+    m.RoundName AS Round,
+    m.KickoffDateTimeLocal,
+    m.KickoffDateTimeUTC,
+    v.VenueName AS Venue,
+    ht.TeamID AS HomeTeamID,
+    ht.TeamName AS HomeTeam,
+    at.TeamID AS AwayTeamID,
+    at.TeamName AS AwayTeam,
+    m.HomeScore,
+    m.AwayScore,
+    m.MatchStatus,
+    m.ScoreStatus,
+    m.ResultReadyFlag,
+    m.ResultValidationStatus,
+    m.ScoreSource,
+    m.ScoreCapturedAt,
+    CAST(CASE WHEN fp.MatchID IS NOT NULL THEN 1 ELSE 0 END AS BIT) AS PredictionAvailableFlag,
+    CAST(CASE
+        WHEN fp.MatchID IS NOT NULL
+             AND m.KickoffDateTimeUTC IS NOT NULL
+             AND fp.PredictionGeneratedAt < m.KickoffDateTimeUTC
+        THEN 1
+        ELSE 0
+    END AS BIT) AS FinalPredictionPredatesKickoffFlag,
+    CAST(CASE
+        WHEN m.ResultReadyFlag = 1
+             AND fp.MatchID IS NOT NULL
+             AND m.KickoffDateTimeUTC IS NOT NULL
+             AND fp.PredictionGeneratedAt < m.KickoffDateTimeUTC
+        THEN 1
+        ELSE 0
+    END AS BIT) AS ProductionEvaluationEligibleFlag,
+    CAST(CASE WHEN m.ResultReadyFlag = 1 THEN 1 ELSE 0 END AS BIT) AS RetrospectiveModelEvaluationEligibleFlag,
+    CASE WHEN m.ResultReadyFlag = 1 THEN m.HomeScore - m.AwayScore ELSE NULL END AS HomeMargin,
+    CASE
+        WHEN m.ResultReadyFlag <> 1 THEN NULL
+        WHEN m.HomeScore > m.AwayScore THEN 'H'
+        WHEN m.AwayScore > m.HomeScore THEN 'A'
+        ELSE 'D'
+    END AS ActualOutcome,
+    CASE
+        WHEN m.ResultReadyFlag <> 1 THEN 'Awaiting confirmed result'
+        WHEN m.HomeScore > m.AwayScore THEN ht.TeamName
+        WHEN m.AwayScore > m.HomeScore THEN at.TeamName
+        ELSE 'Draw'
+    END AS MatchResult,
+    fp.ProductionPredictionID,
+    fp.ProductionPredictionHistoryID,
+    fp.HomeWinProbability,
+    fp.DrawProbability,
+    fp.AwayWinProbability,
+    fp.PredictedHomeMargin,
+    fp.PredictedWinner AS PredictedOutcome,
+    CASE fp.PredictedWinner WHEN 'H' THEN ht.TeamName WHEN 'A' THEN at.TeamName WHEN 'D' THEN 'Draw' ELSE NULL END AS PredictedWinner,
+    CASE
+        WHEN m.ResultReadyFlag = 1
+             AND fp.MatchID IS NOT NULL
+             AND m.KickoffDateTimeUTC IS NOT NULL
+             AND fp.PredictionGeneratedAt < m.KickoffDateTimeUTC
+             AND fp.PredictedWinner IS NOT NULL
+             AND (
+                 (m.HomeScore > m.AwayScore AND fp.PredictedWinner = 'H')
+                 OR (m.AwayScore > m.HomeScore AND fp.PredictedWinner = 'A')
+                 OR (m.HomeScore = m.AwayScore AND fp.PredictedWinner = 'D')
+             )
+        THEN 1
+        WHEN m.ResultReadyFlag = 1
+             AND fp.MatchID IS NOT NULL
+             AND m.KickoffDateTimeUTC IS NOT NULL
+             AND fp.PredictionGeneratedAt < m.KickoffDateTimeUTC
+             AND fp.PredictedWinner IS NOT NULL
+        THEN 0
+        ELSE NULL
+    END AS CorrectWinner,
+    CASE WHEN m.ResultReadyFlag = 1
+              AND fp.MatchID IS NOT NULL
+              AND m.KickoffDateTimeUTC IS NOT NULL
+              AND fp.PredictionGeneratedAt < m.KickoffDateTimeUTC
+              AND fp.PredictedHomeMargin IS NOT NULL
+        THEN CAST((m.HomeScore - m.AwayScore) - fp.PredictedHomeMargin AS DECIMAL(12,3))
+        ELSE NULL
+    END AS PredictedMarginError,
+    CASE WHEN m.ResultReadyFlag = 1
+              AND fp.MatchID IS NOT NULL
+              AND m.KickoffDateTimeUTC IS NOT NULL
+              AND fp.PredictionGeneratedAt < m.KickoffDateTimeUTC
+              AND fp.PredictedHomeMargin IS NOT NULL
+        THEN CAST(ABS((m.HomeScore - m.AwayScore) - fp.PredictedHomeMargin) AS DECIMAL(12,3))
+        ELSE NULL
+    END AS AbsoluteMarginError,
+    pm.ModelName + ' ' + pm.ModelVersion AS ProbabilityModel,
+    mm.ModelName + ' ' + mm.ModelVersion AS MarginModel,
+    COALESCE(pm.ModelName + ' ' + pm.ModelVersion, mm.ModelName + ' ' + mm.ModelVersion) AS PredictionModel,
+    fp.PredictionGeneratedAt,
+    fp.FeatureCutoffDate,
+    CASE
+        WHEN m.ResultReadyFlag <> 1 THEN 'Awaiting confirmed result'
+        WHEN fp.MatchID IS NULL THEN 'Production prediction unavailable'
+        WHEN m.KickoffDateTimeUTC IS NULL THEN 'Kickoff timestamp unavailable'
+        WHEN fp.PredictionGeneratedAt >= m.KickoffDateTimeUTC THEN 'Prediction generated after kickoff'
+        ELSE 'Production evaluation eligible'
+    END AS EvaluationStatus
+FROM Silver_Matches m
+JOIN Silver_Seasons s ON s.SeasonID = m.SeasonID
+JOIN Silver_Competitions c ON c.CompetitionID = s.CompetitionID
+JOIN Silver_Teams ht ON ht.TeamID = m.HomeTeamID
+JOIN Silver_Teams at ON at.TeamID = m.AwayTeamID
+LEFT JOIN Silver_Venues v ON v.VenueID = m.VenueID
+LEFT JOIN vw_Gold_FinalPreMatchProductionPrediction fp ON fp.MatchID = m.MatchID
+LEFT JOIN Gold_ModelVersions pm ON pm.ModelVersionID = fp.ProbabilityModelVersionID
+LEFT JOIN Gold_ModelVersions mm ON mm.ModelVersionID = fp.MarginModelVersionID
+WHERE c.CompetitionCode = 'NPC'
+  AND m.MatchStatus IN ('Completed', 'Live');
+GO
+
+CREATE OR ALTER VIEW vw_Gold_PlayerTop10ByDiscipline AS
+WITH totals AS (
+    SELECT
+        ps.Season,
+        'NPC' AS Competition,
+        ps.StatName AS Discipline,
+        ps.Team,
+        p.PlayerID,
+        ps.PlayerName,
+        SUM(COALESCE(ps.StatValue, 0)) AS SeasonTotal,
+        COUNT(DISTINCT ps.MatchID) AS Appearances,
+        COUNT(*) AS SourceObservationCount
+    FROM NPC_PlayerStats ps
+    LEFT JOIN Silver_Players p ON p.PlayerName = ps.PlayerName
+    WHERE ps.StatValue IS NOT NULL
+      AND ps.StatName IS NOT NULL
+      AND ps.PlayerName IS NOT NULL
+    GROUP BY ps.Season, ps.StatName, ps.Team, p.PlayerID, ps.PlayerName
+),
+ranked AS (
+    SELECT
+        *,
+        DENSE_RANK() OVER (
+            PARTITION BY Season, Competition, Discipline
+            ORDER BY SeasonTotal DESC
+        ) AS CalculatedRank
+    FROM totals
+)
+SELECT
+    Season,
+    Competition,
+    Discipline,
+    CalculatedRank,
+    Team,
+    PlayerID,
+    PlayerName,
+    SeasonTotal,
+    Appearances,
+    CAST(SeasonTotal / NULLIF(Appearances, 0) AS DECIMAL(12,2)) AS PerAppearance
+FROM ranked
+WHERE CalculatedRank <= 10;
 GO
 
 PRINT 'Gold model evaluation views ready.';

@@ -119,6 +119,11 @@ CREATE TABLE Silver_Matches (
     HomeScore     INT NULL,
     AwayScore     INT NULL,
     MatchStatus   VARCHAR(30) NULL,
+    ScoreStatus   VARCHAR(30) NULL,
+    ResultReadyFlag BIT NOT NULL DEFAULT 0,
+    ScoreSource   VARCHAR(200) NULL,
+    ScoreCapturedAt DATETIME2 NULL,
+    ResultValidationStatus VARCHAR(50) NULL,
     SourceSystem  VARCHAR(50) NULL,
     SourceURL     VARCHAR(500) NULL,
     UpdatedAt     DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
@@ -143,6 +148,26 @@ GO
 
 IF COL_LENGTH('Silver_Matches', 'KickoffTimeCapturedAt') IS NULL
 ALTER TABLE Silver_Matches ADD KickoffTimeCapturedAt DATETIME2 NULL;
+GO
+
+IF COL_LENGTH('Silver_Matches', 'ScoreStatus') IS NULL
+ALTER TABLE Silver_Matches ADD ScoreStatus VARCHAR(30) NULL;
+GO
+
+IF COL_LENGTH('Silver_Matches', 'ResultReadyFlag') IS NULL
+ALTER TABLE Silver_Matches ADD ResultReadyFlag BIT NOT NULL DEFAULT 0;
+GO
+
+IF COL_LENGTH('Silver_Matches', 'ScoreSource') IS NULL
+ALTER TABLE Silver_Matches ADD ScoreSource VARCHAR(200) NULL;
+GO
+
+IF COL_LENGTH('Silver_Matches', 'ScoreCapturedAt') IS NULL
+ALTER TABLE Silver_Matches ADD ScoreCapturedAt DATETIME2 NULL;
+GO
+
+IF COL_LENGTH('Silver_Matches', 'ResultValidationStatus') IS NULL
+ALTER TABLE Silver_Matches ADD ResultValidationStatus VARCHAR(50) NULL;
 GO
 
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Silver_TeamMatchStats')
@@ -464,6 +489,73 @@ CREATE TABLE Gold_ProductionPredictions (
 );
 GO
 
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Gold_ProductionPredictionHistory')
+CREATE TABLE Gold_ProductionPredictionHistory (
+    ProductionPredictionHistoryID BIGINT IDENTITY PRIMARY KEY,
+    ProductionPredictionID   BIGINT NULL,
+    MatchID                  INT NOT NULL REFERENCES Silver_Matches(MatchID),
+    ProbabilityModelVersionID INT NOT NULL REFERENCES Gold_ModelVersions(ModelVersionID),
+    MarginModelVersionID     INT NOT NULL REFERENCES Gold_ModelVersions(ModelVersionID),
+    PredictionGeneratedAt    DATETIME2 NOT NULL,
+    FeatureCutoffDate        DATE NULL,
+    HomeWinProbability       DECIMAL(9,6) NOT NULL,
+    DrawProbability          DECIMAL(9,6) NOT NULL,
+    AwayWinProbability       DECIMAL(9,6) NOT NULL,
+    PredictedHomeMargin      DECIMAL(9,3) NOT NULL,
+    PredictedWinner          CHAR(1) NOT NULL,
+    ConfidenceLevel          VARCHAR(20) NOT NULL,
+    DataQualityStatus        VARCHAR(20) NOT NULL,
+    MatchStatusAtGeneration  VARCHAR(30) NULL,
+    KickoffDateTimeUTC       DATETIME2 NULL,
+    CreatedAt                DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);
+GO
+
+IF NOT EXISTS (
+    SELECT * FROM sys.indexes
+    WHERE name = 'UX_Gold_ProductionPredictionHistory_FinalCandidate'
+      AND object_id = OBJECT_ID('Gold_ProductionPredictionHistory')
+)
+CREATE UNIQUE INDEX UX_Gold_ProductionPredictionHistory_FinalCandidate
+ON Gold_ProductionPredictionHistory (
+    MatchID, ProbabilityModelVersionID, MarginModelVersionID, PredictionGeneratedAt
+);
+GO
+
+INSERT INTO Gold_ProductionPredictionHistory (
+    ProductionPredictionID, MatchID, ProbabilityModelVersionID, MarginModelVersionID,
+    PredictionGeneratedAt, FeatureCutoffDate, HomeWinProbability, DrawProbability,
+    AwayWinProbability, PredictedHomeMargin, PredictedWinner, ConfidenceLevel,
+    DataQualityStatus, MatchStatusAtGeneration, KickoffDateTimeUTC
+)
+SELECT
+    pp.ProductionPredictionID,
+    pp.MatchID,
+    pp.ProbabilityModelVersionID,
+    pp.MarginModelVersionID,
+    pp.PredictionGeneratedAt,
+    pp.FeatureCutoffDate,
+    pp.HomeWinProbability,
+    pp.DrawProbability,
+    pp.AwayWinProbability,
+    pp.PredictedHomeMargin,
+    pp.PredictedWinner,
+    pp.ConfidenceLevel,
+    pp.DataQualityStatus,
+    m.MatchStatus,
+    m.KickoffDateTimeUTC
+FROM Gold_ProductionPredictions pp
+JOIN Silver_Matches m ON m.MatchID = pp.MatchID
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM Gold_ProductionPredictionHistory h
+    WHERE h.MatchID = pp.MatchID
+      AND h.ProbabilityModelVersionID = pp.ProbabilityModelVersionID
+      AND h.MarginModelVersionID = pp.MarginModelVersionID
+      AND h.PredictionGeneratedAt = pp.PredictionGeneratedAt
+);
+GO
+
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Gold_ProductionDataQualityIssues')
 CREATE TABLE Gold_ProductionDataQualityIssues (
     ProductionDataQualityIssueID BIGINT IDENTITY PRIMARY KEY,
@@ -514,6 +606,9 @@ SELECT
     at.TeamName AS AwayTeam,
     m.HomeScore,
     m.AwayScore,
+    m.ScoreStatus,
+    m.ResultReadyFlag,
+    m.ResultValidationStatus,
     m.HomeScore - m.AwayScore AS HomeMargin,
     CASE
         WHEN m.HomeScore > m.AwayScore THEN ht.TeamName

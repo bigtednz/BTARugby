@@ -149,6 +149,9 @@ Current reporting views:
 - `vw_Gold_CombinedUpcomingPredictions`
 - `vw_Gold_ProductionUpcomingPredictions`
 - `vw_Gold_ProductionHistoricalPredictions`
+- `vw_Gold_FinalPreMatchProductionPrediction`
+- `vw_Gold_ProductionResults`
+- `vw_Gold_PlayerTop10ByDiscipline`
 - `vw_Gold_ProductionMatchExplanation`
 - `vw_Gold_ProductionModelSummary`
 - `vw_Gold_ProductionCalibration`
@@ -173,6 +176,22 @@ Production prediction principles:
 - block critical data-quality failures from production upcoming outputs
 - show form, rest-day, head-to-head and team-sheet fields as context only for Elo predictions
 - preserve unknown kickoff times as NULL rather than displaying midnight
+- preserve final pre-match production predictions after a fixture completes
+- separate match completion from score readiness before feeding results into standings, feature views, or evaluation reporting
+
+### Result Lifecycle Handling
+
+`Results Lifecycle v0.5.1` adds explicit score-readiness fields to NPC and Silver matches:
+
+- `MatchStatus`: scheduled, live, completed or postponed lifecycle.
+- `ScoreStatus`: pending, confirmed or unavailable score evidence.
+- `ResultReadyFlag`: confirmed scores eligible for standings, Gold feature views and result display.
+- `PredictionAvailableFlag`: a retained final pre-match production prediction exists.
+- `ProductionEvaluationEligibleFlag`: result-ready, prediction available and prediction generated before kickoff.
+- `RetrospectiveModelEvaluationEligibleFlag`: result can remain in backtest datasets when those pipelines independently generated valid out-of-sample predictions.
+- `ScoreSource`, `ScoreCapturedAt`, `ResultValidationStatus`: audit metadata from Bronze RugbyPass fixture evidence.
+
+Confirmed `0-0` results are valid. Placeholder `0-0` rows are excluded until source evidence confirms the score. `Gold_ProductionPredictionHistory` retains production predictions so completed fixtures can be compared with the final pre-match prediction.
 
 ### Kickoff Time Handling
 

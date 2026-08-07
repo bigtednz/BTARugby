@@ -40,9 +40,10 @@ Run these scripts in order against SQL Server:
 4. `database/load_npc_to_silver.sql`
 5. `database/gold_feature_views.sql`
 6. `database/model_evaluation_views.sql`
-7. `analytics/baseline_evaluation.py`
-8. `analytics/ridge_margin_model.py`
-9. `analytics/run_production_predictions.py`
+7. `analytics/backfill_result_lifecycle.py --season 2026`
+8. `analytics/baseline_evaluation.py`
+9. `analytics/ridge_margin_model.py`
+10. `analytics/run_production_predictions.py`
 
 The database name is currently:
 
@@ -149,6 +150,9 @@ Production reporting views:
 
 - `vw_Gold_ProductionUpcomingPredictions`
 - `vw_Gold_ProductionHistoricalPredictions`
+- `vw_Gold_FinalPreMatchProductionPrediction`
+- `vw_Gold_ProductionResults`
+- `vw_Gold_PlayerTop10ByDiscipline`
 - `vw_Gold_ProductionMatchExplanation`
 - `vw_Gold_ProductionModelSummary`
 - `vw_Gold_ProductionCalibration`
@@ -156,6 +160,43 @@ Production reporting views:
 - `vw_Gold_ProductionPipelineRuns`
 
 Power BI build notes are in [docs/powerbi_reporting_guide.md](docs/powerbi_reporting_guide.md).
+
+## Local Match Centre v0.5
+
+`webapp/app.py` implements a local, read-only Dash browser application for upcoming production predictions, completed results, a derived competition table, player views, and match previews.
+
+Run locally:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe webapp\app.py
+```
+
+Open:
+
+```text
+http://127.0.0.1:8050
+```
+
+The app reads SQL Gold reporting views only, uses a short in-memory cache for normal filtering, and does not generate or modify predictions. Full notes are in [docs/local_match_centre.md](docs/local_match_centre.md).
+
+The header includes:
+
+- `Refresh data`: clears only the webapp cache and rereads SQL views.
+- `Update latest data`: runs the configured local update pipeline, then clears the cache. By default this rebuilds from local Bronze/current SQL data; set `BTA_UPDATE_RUN_SCRAPER=true` to include the RugbyPass scraper first.
+
+## Results Lifecycle v0.5.1
+
+Match completion is separate from score readiness:
+
+- `MatchStatus` tracks scheduled/live/completed lifecycle.
+- `ScoreStatus` tracks pending/confirmed/unavailable score evidence.
+- `ResultReadyFlag=1` means the score is confirmed and eligible for standings and result display.
+- `PredictionAvailableFlag=1` means a retained final pre-match production prediction is available.
+- `ProductionEvaluationEligibleFlag=1` means the match has both a confirmed result and a retained production prediction that predates kickoff.
+- `RetrospectiveModelEvaluationEligibleFlag=1` means the match can be used by retrospective/backtest model evaluation if that pipeline independently generated valid out-of-sample predictions.
+
+Final pre-match production predictions are retained in `Gold_ProductionPredictionHistory` and exposed through `vw_Gold_FinalPreMatchProductionPrediction` and `vw_Gold_ProductionResults`. Player top 10s use `vw_Gold_PlayerTop10ByDiscipline` with dense ranks by season total.
 
 ## Kickoff Times v0.4.1
 

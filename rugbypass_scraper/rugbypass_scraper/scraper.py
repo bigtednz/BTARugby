@@ -29,9 +29,11 @@ from playwright.async_api import async_playwright
 
 try:
     from analytics.kickoff_times import kickoff_from_match_dict, kickoff_from_values
+    from analytics.result_lifecycle import derive_result_lifecycle
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from analytics.kickoff_times import kickoff_from_match_dict, kickoff_from_values
+    from analytics.result_lifecycle import derive_result_lifecycle
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 SEASON           = 2026
@@ -107,11 +109,17 @@ CREATE TABLE {MATCHES_TABLE} (
     AwayTeam    VARCHAR(50),
     HomeScore   INT,
     AwayScore   INT,
+    MatchStatus VARCHAR(30) NULL,
+    ScoreStatus VARCHAR(30) NULL,
+    ResultReadyFlag BIT NOT NULL DEFAULT 0,
+    ScoreSource VARCHAR(200) NULL,
+    ScoreCapturedAt DATETIME2 NULL,
+    ResultValidationStatus VARCHAR(50) NULL,
     ScrapedAt   DATETIME DEFAULT GETDATE()
 )
 """
 
-DDL_MATCH_KICKOFF_ALTERS = f"""
+DDL_MATCH_METADATA_ALTERS = f"""
 IF COL_LENGTH('{MATCHES_TABLE}', 'KickoffDateTimeLocal') IS NULL
 ALTER TABLE {MATCHES_TABLE} ADD KickoffDateTimeLocal DATETIME2 NULL;
 IF COL_LENGTH('{MATCHES_TABLE}', 'KickoffDateTimeUTC') IS NULL
@@ -122,6 +130,18 @@ IF COL_LENGTH('{MATCHES_TABLE}', 'KickoffTimeSource') IS NULL
 ALTER TABLE {MATCHES_TABLE} ADD KickoffTimeSource VARCHAR(200) NULL;
 IF COL_LENGTH('{MATCHES_TABLE}', 'KickoffTimeCapturedAt') IS NULL
 ALTER TABLE {MATCHES_TABLE} ADD KickoffTimeCapturedAt DATETIME2 NULL;
+IF COL_LENGTH('{MATCHES_TABLE}', 'MatchStatus') IS NULL
+ALTER TABLE {MATCHES_TABLE} ADD MatchStatus VARCHAR(30) NULL;
+IF COL_LENGTH('{MATCHES_TABLE}', 'ScoreStatus') IS NULL
+ALTER TABLE {MATCHES_TABLE} ADD ScoreStatus VARCHAR(30) NULL;
+IF COL_LENGTH('{MATCHES_TABLE}', 'ResultReadyFlag') IS NULL
+ALTER TABLE {MATCHES_TABLE} ADD ResultReadyFlag BIT NOT NULL DEFAULT 0;
+IF COL_LENGTH('{MATCHES_TABLE}', 'ScoreSource') IS NULL
+ALTER TABLE {MATCHES_TABLE} ADD ScoreSource VARCHAR(200) NULL;
+IF COL_LENGTH('{MATCHES_TABLE}', 'ScoreCapturedAt') IS NULL
+ALTER TABLE {MATCHES_TABLE} ADD ScoreCapturedAt DATETIME2 NULL;
+IF COL_LENGTH('{MATCHES_TABLE}', 'ResultValidationStatus') IS NULL
+ALTER TABLE {MATCHES_TABLE} ADD ResultValidationStatus VARCHAR(50) NULL;
 """
 
 DDL_STATS = f"""
@@ -325,6 +345,11 @@ def safe_decimal(val):
     except Exception:
         return None
 
+def score_source_for_match(status, played):
+    if played or str(status or "").strip().lower() in {"result", "completed", "complete", "full time", "full-time", "ft"}:
+        return f"RugbyPass current-game-days status={status or 'unknown'} played={bool(played)}"
+    return None
+
 def parse_ratio(val):
     """'1:4.3' → 4.3"""
     try:
@@ -453,6 +478,18 @@ def parse_match_from_dict(d: dict) -> dict | None:
     kickoff = kickoff_from_match_dict(d)
     match_date = kickoff.match_date
     match_season = safe_int(match_date[:4]) if match_date else None
+    home_score = safe_int(deep_get(d, 'homeScore', 'home_score'))
+    away_score = safe_int(deep_get(d, 'awayScore', 'away_score'))
+    status = deep_get(d, 'status', 'matchStatus')
+    played = bool(deep_get(d, 'played', default=False))
+    score_source = score_source_for_match(status, played)
+    lifecycle = derive_result_lifecycle(
+        home_score=home_score,
+        away_score=away_score,
+        source_status=status,
+        played=played,
+        score_source=score_source,
+    )
 
     return {
         "game_id":    gid,
@@ -466,12 +503,17 @@ def parse_match_from_dict(d: dict) -> dict | None:
         "away_team":  away_name,
         "home_slug":  obj_slug(home_obj, home_name),
         "away_slug":  obj_slug(away_obj, away_name),
-        "home_score": safe_int(deep_get(d, 'homeScore', 'home_score')),
-        "away_score": safe_int(deep_get(d, 'awayScore', 'away_score')),
+        "home_score": home_score,
+        "away_score": away_score,
         "round":      str(deep_get(d, 'round', 'roundName', 'roundNumber') or ''),
         "venue":      deep_get(d, 'venue', 'venueName', 'ground', 'stadium'),
-        "status":     deep_get(d, 'status', 'matchStatus'),
-        "played":     bool(deep_get(d, 'played', default=False)),
+        "status":     status,
+        "played":     played,
+        "match_status": lifecycle.match_status,
+        "score_status": lifecycle.score_status,
+        "result_ready": 1 if lifecycle.result_ready else 0,
+        "score_source": lifecycle.score_source,
+        "result_validation_status": lifecycle.validation_status,
         "source_url":  deep_get(d, 'url', 'matchUrl'),
     }
 
@@ -1358,19 +1400,38 @@ def write_to_sql(conn, match_info, stats):
         MERGE {MATCHES_TABLE} AS t
         USING (SELECT ? AS MatchID) AS s ON t.MatchID = s.MatchID
         WHEN MATCHED THEN UPDATE SET
+            Season = COALESCE(?, t.Season),
+            Round = COALESCE(?, t.Round),
+            MatchDate = COALESCE(?, t.MatchDate),
             KickoffDateTimeLocal = CASE WHEN ? = 1 THEN ? ELSE t.KickoffDateTimeLocal END,
             KickoffDateTimeUTC = CASE WHEN ? = 1 THEN ? ELSE t.KickoffDateTimeUTC END,
             KickoffTimeKnownFlag = CASE WHEN ? = 1 THEN 1 ELSE t.KickoffTimeKnownFlag END,
             KickoffTimeSource = CASE WHEN ? = 1 THEN ? ELSE COALESCE(t.KickoffTimeSource, ?) END,
-            KickoffTimeCapturedAt = CASE WHEN ? = 1 THEN SYSUTCDATETIME() ELSE t.KickoffTimeCapturedAt END
+            KickoffTimeCapturedAt = CASE WHEN ? = 1 THEN SYSUTCDATETIME() ELSE t.KickoffTimeCapturedAt END,
+            Venue = COALESCE(?, t.Venue),
+            HomeTeam = COALESCE(?, t.HomeTeam),
+            AwayTeam = COALESCE(?, t.AwayTeam),
+            HomeScore = CASE WHEN ? = 1 THEN ? ELSE t.HomeScore END,
+            AwayScore = CASE WHEN ? = 1 THEN ? ELSE t.AwayScore END,
+            MatchStatus = COALESCE(?, t.MatchStatus),
+            ScoreStatus = COALESCE(?, t.ScoreStatus),
+            ResultReadyFlag = CASE WHEN ? = 1 THEN 1 ELSE t.ResultReadyFlag END,
+            ScoreSource = COALESCE(?, t.ScoreSource),
+            ScoreCapturedAt = CASE WHEN ? = 1 THEN SYSUTCDATETIME() ELSE t.ScoreCapturedAt END,
+            ResultValidationStatus = COALESCE(?, t.ResultValidationStatus),
+            ScrapedAt = GETDATE()
         WHEN NOT MATCHED THEN
             INSERT (
                 MatchID,Season,Round,MatchDate,KickoffDateTimeLocal,KickoffDateTimeUTC,
                 KickoffTimeKnownFlag,KickoffTimeSource,KickoffTimeCapturedAt,
-                Venue,HomeTeam,AwayTeam,HomeScore,AwayScore
+                Venue,HomeTeam,AwayTeam,HomeScore,AwayScore,MatchStatus,ScoreStatus,
+                ResultReadyFlag,ScoreSource,ScoreCapturedAt,ResultValidationStatus
             )
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
     """, (gid,
+          match_season,
+          match_info.get("round"),
+          match_info.get("match_date"),
           match_info.get("kickoff_time_known", 0),
           match_info.get("kickoff_datetime_local"),
           match_info.get("kickoff_time_known", 0),
@@ -1380,6 +1441,19 @@ def write_to_sql(conn, match_info, stats):
           match_info.get("kickoff_time_source"),
           match_info.get("kickoff_time_source"),
           match_info.get("kickoff_time_known", 0),
+          match_info.get("venue"),
+          match_info.get("home_team"),
+          match_info.get("away_team"),
+          match_info.get("result_ready", 0),
+          match_info.get("home_score"),
+          match_info.get("result_ready", 0),
+          match_info.get("away_score"),
+          match_info.get("match_status"),
+          match_info.get("score_status"),
+          match_info.get("result_ready", 0),
+          match_info.get("score_source"),
+          match_info.get("result_ready", 0),
+          match_info.get("result_validation_status"),
           gid, match_season,
           match_info.get("round"),
           match_info.get("match_date"),
@@ -1392,7 +1466,13 @@ def write_to_sql(conn, match_info, stats):
           match_info.get("home_team"),
           match_info.get("away_team"),
           match_info.get("home_score"),
-          match_info.get("away_score")))
+          match_info.get("away_score"),
+          match_info.get("match_status"),
+          match_info.get("score_status"),
+          match_info.get("result_ready", 0),
+          match_info.get("score_source"),
+          datetime.utcnow() if match_info.get("result_ready", 0) else None,
+          match_info.get("result_validation_status")))
 
     if not has_meaningful_stats(stats):
         conn.commit()
@@ -1573,7 +1653,7 @@ async def main():
         cur  = conn.cursor()
         cur.execute(DDL_BRONZE_SNAPSHOTS)
         cur.execute(DDL_MATCHES)
-        cur.execute(DDL_MATCH_KICKOFF_ALTERS)
+        cur.execute(DDL_MATCH_METADATA_ALTERS)
         cur.execute(DDL_STATS)
         cur.execute(DDL_PLAYER_STATS)
         cur.execute(DDL_PLAYER_APPEARANCES)
@@ -1622,6 +1702,11 @@ async def main():
                     f"SELECT COUNT(*) FROM {PLAYER_APPEARANCES_TABLE} WHERE MatchID = ?", game_id
                 )
                 appearance_count = cur.fetchone()[0]
+                cur.execute(
+                    f"SELECT COALESCE(ResultReadyFlag, 0) FROM {MATCHES_TABLE} WHERE MatchID = ?", game_id
+                )
+                existing_result_row = cur.fetchone()
+                existing_result_ready = bool(existing_result_row[0]) if existing_result_row else False
                 cur.execute("""
                     SELECT COUNT(DISTINCT SourceEntity)
                     FROM Bronze_SourceSnapshots
@@ -1630,6 +1715,11 @@ async def main():
                 """, str(game_id))
                 scrape_attempt_count = cur.fetchone()[0]
                 is_historical = (fixture_info.get("season") or SEASON) < SEASON
+                if fixture_info.get("result_ready") and not existing_result_ready:
+                    write_to_sql(conn, fixture_info, {})
+                    log.info("  -> Final score updated from fixture source")
+                    success += 1
+                    continue
                 if (
                     (player_stat_count > 0 and appearance_count > 0)
                     or (is_historical and scrape_attempt_count >= 2)

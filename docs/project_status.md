@@ -1,6 +1,6 @@
 # BTA Rugby Analytics Project Status
 
-Last updated: 2026-08-03
+Last updated: 2026-08-07
 
 ## Current Objective
 
@@ -260,6 +260,59 @@ Example conversions:
 | 950775 | `19:10pm NZST` | 2026-08-06 19:10 | 2026-08-06 07:10 |
 | 950837 | `17:05pm NZDT` | 2026-10-04 17:05 | 2026-10-04 04:05 |
 
+### Local Match Centre v0.5.0
+
+- Added a local read-only Dash application under `webapp/`.
+- Added a SQLAlchemy/pandas repository layer over existing Gold production/reporting views.
+- Added Match Centre filters for season, round, match-date range, team and confidence.
+- Added fixture cards with kickoff handling, three-way probabilities, predicted winner, human-readable margin, confidence, model version and readiness status.
+- Added completed Results page from `vw_Gold_TeamMatchBase`.
+- Added derived competition Table page and Players page from existing Gold/Silver/NPC read-only data.
+- Extended Results with stored Elo prediction versus actual result where available.
+- Extended Players with top 10 season totals for each RugbyPass player-stat discipline.
+- Added Match Preview route `/match/<MatchID>` using parameterised SQL.
+- Added foundation pages for Model Performance and Pipeline Status.
+- Added `.env.example`, `requirements.txt`, stylesheet and unit tests for webapp formatting, filtering and repository behavior.
+- Documented the app in `docs/local_match_centre.md`.
+
+### Data Integrity and Results Lifecycle v0.5.1
+
+- Added pure result lifecycle helpers in `analytics/result_lifecycle.py`.
+- Added `analytics/backfill_result_lifecycle.py` to reprocess Bronze RugbyPass fixture snapshots into result readiness fields without hard-coded scores.
+- Added score lifecycle fields to NPC and Silver matches:
+  - `ScoreStatus`
+  - `ResultReadyFlag`
+  - `ScoreSource`
+  - `ScoreCapturedAt`
+  - `ResultValidationStatus`
+- Updated the scraper so matched `NPC_Matches` rows receive final score and lifecycle updates even when player stats already exist.
+- Added `Gold_ProductionPredictionHistory` to retain final pre-match production predictions.
+- Added Gold views:
+  - `vw_Gold_FinalPreMatchProductionPrediction`
+  - `vw_Gold_ProductionResults`
+  - `vw_Gold_PlayerTop10ByDiscipline`
+- Added explicit result/prediction eligibility flags:
+  - `ResultReadyFlag`
+  - `PredictionAvailableFlag`
+  - `FinalPredictionPredatesKickoffFlag`
+  - `ProductionEvaluationEligibleFlag`
+  - `RetrospectiveModelEvaluationEligibleFlag`
+- Updated `vw_Gold_TeamMatchBase` so only `ResultReadyFlag=1` confirmed scores enter feature and standings calculations.
+- Updated the Dash Results page to show score readiness, final pre-match prediction, actual result, winner correctness and margin error.
+- Updated the Dash Players page to show dense-ranked top 10 season totals by discipline and removed internal scrape row counts.
+
+Local validation result:
+
+- 2026 fixture rows parsed from Bronze snapshots: 70
+- 2026 result-ready matches: 9
+- 2026 scheduled/pending matches: 61
+- 2026 retained final pre-match production predictions: 2
+- 2026 production-evaluation eligible matches: 2
+- 2026 result-ready matches without recoverable production prediction: 7
+- Corrected from Bronze evidence:
+  - `950775`: North Harbour 59, Counties Manukau 19
+  - `950776`: Taranaki Bulls 32, Waikato 38
+
 ### Data Reset and Repeatability
 
 - Added `database/reset_data.sql` to clear Bronze/Silver/Gold and NPC scraper tables for clean reloads.
@@ -282,8 +335,8 @@ Example conversions:
 
 | Item | Count |
 | --- | ---: |
-| Completed matches | 391 |
-| Scheduled matches | 63 |
+| Completed result-ready matches | 370 |
+| Scheduled pending matches | 61 |
 | Silver players | 929 |
 | Silver player appearances | 6,348 |
 
@@ -291,7 +344,7 @@ Example conversions:
 
 | Item | Count |
 | --- | ---: |
-| Match feature rows | 391 |
+| Match feature rows | 370 |
 | Predictions | 1,959 |
 | Detailed v0.2 evaluation rows | 1,190 |
 | v0.2 calibration rows | 126 |
@@ -300,6 +353,7 @@ Example conversions:
 | Ridge v0.3 parameter rows | 88 |
 | Ridge v0.3 contribution rows | 6,622 |
 | Production predictions | 63 |
+| Production prediction history rows | 63 |
 | Production champion registry rows | 3 |
 | Production pipeline runs | 3 |
 
@@ -386,12 +440,10 @@ Across 2023-2025 completed seasons, `EloOnlyBaseline v0.2.0` is currently the st
 
 ### Platform
 
-- Add Power BI-ready reporting views.
-- Add dashboard/API layer for:
-  - upcoming match predictions
+- Extend the Local Match Centre with richer:
+  - model-performance charts
   - team form
   - head-to-head comparison
-  - model performance
   - player continuity
 - Add a data quality monitor for missing snapshots, missing team sheets, and suspicious `0-0` rows.
 

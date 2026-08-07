@@ -12,6 +12,8 @@ Use Power BI Desktop's SQL Server connector.
 Load these views:
 
 - `vw_Gold_ProductionUpcomingPredictions`
+- `vw_Gold_ProductionResults`
+- `vw_Gold_PlayerTop10ByDiscipline`
 - `vw_Gold_ProductionMatchExplanation`
 - `vw_Gold_ProductionHistoricalPredictions`
 - `vw_Gold_ProductionModelSummary`
@@ -58,22 +60,28 @@ CALCULATE(
     'vw_Gold_ProductionDataQuality'[Severity] = "Warning"
 )
 
-Historical Winner Accuracy =
+Production Results Winner Accuracy =
 DIVIDE(
     SUMX(
-        'vw_Gold_ProductionHistoricalPredictions',
-        IF('vw_Gold_ProductionHistoricalPredictions'[CorrectWinner] = TRUE(), 1, 0)
+        FILTER(
+            'vw_Gold_ProductionResults',
+            'vw_Gold_ProductionResults'[ProductionEvaluationEligibleFlag] = TRUE()
+        ),
+        IF('vw_Gold_ProductionResults'[CorrectWinner] = TRUE(), 1, 0)
     ),
     COUNTROWS(
         FILTER(
-            'vw_Gold_ProductionHistoricalPredictions',
-            NOT ISBLANK('vw_Gold_ProductionHistoricalPredictions'[CorrectWinner])
+            'vw_Gold_ProductionResults',
+            'vw_Gold_ProductionResults'[ProductionEvaluationEligibleFlag] = TRUE()
         )
     )
 )
 
-Historical Margin MAE =
-AVERAGE('vw_Gold_ProductionHistoricalPredictions'[AbsoluteMarginError])
+Production Results Margin MAE =
+CALCULATE(
+    AVERAGE('vw_Gold_ProductionResults'[AbsoluteMarginError]),
+    'vw_Gold_ProductionResults'[ProductionEvaluationEligibleFlag] = TRUE()
+)
 
 Pipeline Errors =
 SUM('vw_Gold_ProductionPipelineRuns'[ErrorCount])
@@ -178,22 +186,39 @@ Slicers:
 
 ## Page 5: Historical Prediction Explorer
 
-Source view: `vw_Gold_ProductionHistoricalPredictions`
+Source view: `vw_Gold_ProductionResults`
 
 Recommended visuals:
 
-- Table: `Season`, `Round`, `HomeTeam`, `AwayTeam`, `HomeScore`, `AwayScore`, `ActualOutcome`, `PredictedOutcome`, `CorrectWinner`, `HomeProbabilityError`, `PredictedMarginError`
-- Cards: `Historical Winner Accuracy`, `Historical Margin MAE`
-- Scatter plot: `HomeProbabilityError` versus `PredictedMarginError`
+- Table: `Season`, `Round`, `HomeTeam`, `AwayTeam`, `HomeScore`, `AwayScore`, `ScoreStatus`, `ResultReadyFlag`, `PredictionAvailableFlag`, `ProductionEvaluationEligibleFlag`, `PredictedWinner`, `CorrectWinner`, `PredictedMarginError`, `AbsoluteMarginError`, `EvaluationStatus`
+- Cards: `Production Results Winner Accuracy`, `Production Results Margin MAE`
+- Scatter plot: `PredictedHomeMargin` versus `HomeMargin`
 
 Slicers:
 
 - `Season`
 - `ModelName`
 - `ModelVersion`
-- `ActualOutcome`
+- `ScoreStatus`
+- `EvaluationStatus`
 
-## Page 6: Data Quality and Pipeline Status
+Use `ResultReadyFlag = TRUE()` for tables and result display. Use `ProductionEvaluationEligibleFlag = TRUE()` for retained production-prediction accuracy and margin-error measures. Rows that are result-ready but lack retained production predictions can remain in retrospective/backtest model evaluation only when those pipelines independently generated valid out-of-sample predictions.
+
+## Page 6: Player Top 10
+
+Source view: `vw_Gold_PlayerTop10ByDiscipline`
+
+Recommended visuals:
+
+- Bar chart: `PlayerName` by `SeasonTotal`, filtered by `Discipline`.
+- Table: `Season`, `Discipline`, `CalculatedRank`, `Team`, `PlayerName`, `SeasonTotal`, `Appearances`, `PerAppearance`.
+
+Ranking rule:
+
+- `CalculatedRank` is a dense rank within season, competition and discipline.
+- Ties are retained, so a discipline can display more than ten rows.
+
+## Page 7: Data Quality and Pipeline Status
 
 Source views:
 

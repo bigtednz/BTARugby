@@ -569,6 +569,49 @@ def insert_prediction(cursor, prediction: ProductionPrediction) -> None:
         insert_issue(cursor, issue)
 
 
+def insert_prediction_history(cursor, prediction: ProductionPrediction) -> None:
+    cursor.execute(
+        """
+        MERGE Gold_ProductionPredictionHistory AS t
+        USING (
+            SELECT
+                ? AS MatchID,
+                ? AS ProbabilityModelVersionID,
+                ? AS MarginModelVersionID,
+                ? AS PredictionGeneratedAt
+        ) AS s
+        ON t.MatchID = s.MatchID
+           AND t.ProbabilityModelVersionID = s.ProbabilityModelVersionID
+           AND t.MarginModelVersionID = s.MarginModelVersionID
+           AND t.PredictionGeneratedAt = s.PredictionGeneratedAt
+        WHEN NOT MATCHED THEN INSERT (
+            MatchID, ProbabilityModelVersionID, MarginModelVersionID, PredictionGeneratedAt,
+            FeatureCutoffDate, HomeWinProbability, DrawProbability, AwayWinProbability,
+            PredictedHomeMargin, PredictedWinner, ConfidenceLevel, DataQualityStatus,
+            MatchStatusAtGeneration, KickoffDateTimeUTC
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """,
+        prediction.match.match.match_id,
+        prediction.probability_champion.model_version_id,
+        prediction.margin_champion.model_version_id,
+        prediction.generated_at,
+        prediction.match.match.match_id,
+        prediction.probability_champion.model_version_id,
+        prediction.margin_champion.model_version_id,
+        prediction.generated_at,
+        prediction.feature_cutoff_date,
+        base.to_decimal(prediction.home_win_probability),
+        base.to_decimal(prediction.draw_probability),
+        base.to_decimal(prediction.away_win_probability),
+        base.to_decimal(prediction.predicted_home_margin, "0.001"),
+        prediction.predicted_winner,
+        prediction.confidence_level,
+        prediction.data_quality_status,
+        prediction.match.match.match_status,
+        prediction.match.kickoff_datetime_utc,
+    )
+
+
 def insert_issue(cursor, issue: dict) -> None:
     cursor.execute(
         """
@@ -679,6 +722,7 @@ def run(args: argparse.Namespace) -> None:
                 skipped += 1
                 continue
             insert_prediction(cursor, prediction)
+            insert_prediction_history(cursor, prediction)
             written += 1
         if run_id is not None:
             finish_pipeline_run(cursor, run_id, "Succeeded" if errors == 0 else "SucceededWithWarnings", len(eligible), written, warnings, errors)

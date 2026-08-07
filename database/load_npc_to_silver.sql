@@ -27,6 +27,50 @@ IF OBJECT_ID('NPC_Matches', 'U') IS NOT NULL AND COL_LENGTH('NPC_Matches', 'Kick
 ALTER TABLE NPC_Matches ADD KickoffTimeCapturedAt DATETIME2 NULL;
 GO
 
+IF OBJECT_ID('NPC_Matches', 'U') IS NOT NULL AND COL_LENGTH('NPC_Matches', 'MatchStatus') IS NULL
+ALTER TABLE NPC_Matches ADD MatchStatus VARCHAR(30) NULL;
+GO
+
+IF OBJECT_ID('NPC_Matches', 'U') IS NOT NULL AND COL_LENGTH('NPC_Matches', 'ScoreStatus') IS NULL
+ALTER TABLE NPC_Matches ADD ScoreStatus VARCHAR(30) NULL;
+GO
+
+IF OBJECT_ID('NPC_Matches', 'U') IS NOT NULL AND COL_LENGTH('NPC_Matches', 'ResultReadyFlag') IS NULL
+ALTER TABLE NPC_Matches ADD ResultReadyFlag BIT NOT NULL DEFAULT 0;
+GO
+
+IF OBJECT_ID('NPC_Matches', 'U') IS NOT NULL AND COL_LENGTH('NPC_Matches', 'ScoreSource') IS NULL
+ALTER TABLE NPC_Matches ADD ScoreSource VARCHAR(200) NULL;
+GO
+
+IF OBJECT_ID('NPC_Matches', 'U') IS NOT NULL AND COL_LENGTH('NPC_Matches', 'ScoreCapturedAt') IS NULL
+ALTER TABLE NPC_Matches ADD ScoreCapturedAt DATETIME2 NULL;
+GO
+
+IF OBJECT_ID('NPC_Matches', 'U') IS NOT NULL AND COL_LENGTH('NPC_Matches', 'ResultValidationStatus') IS NULL
+ALTER TABLE NPC_Matches ADD ResultValidationStatus VARCHAR(50) NULL;
+GO
+
+IF COL_LENGTH('Silver_Matches', 'ScoreStatus') IS NULL
+ALTER TABLE Silver_Matches ADD ScoreStatus VARCHAR(30) NULL;
+GO
+
+IF COL_LENGTH('Silver_Matches', 'ResultReadyFlag') IS NULL
+ALTER TABLE Silver_Matches ADD ResultReadyFlag BIT NOT NULL DEFAULT 0;
+GO
+
+IF COL_LENGTH('Silver_Matches', 'ScoreSource') IS NULL
+ALTER TABLE Silver_Matches ADD ScoreSource VARCHAR(200) NULL;
+GO
+
+IF COL_LENGTH('Silver_Matches', 'ScoreCapturedAt') IS NULL
+ALTER TABLE Silver_Matches ADD ScoreCapturedAt DATETIME2 NULL;
+GO
+
+IF COL_LENGTH('Silver_Matches', 'ResultValidationStatus') IS NULL
+ALTER TABLE Silver_Matches ADD ResultValidationStatus VARCHAR(50) NULL;
+GO
+
 DECLARE @CompetitionID INT;
 
 MERGE Silver_Competitions AS t
@@ -106,10 +150,64 @@ USING (
         m.HomeScore,
         m.AwayScore,
         CASE
+            WHEN m.MatchStatus IN ('Scheduled', 'Live', 'Completed', 'Postponed', 'Cancelled') THEN m.MatchStatus
+            WHEN m.ResultReadyFlag = 1 THEN 'Completed'
             WHEN m.MatchDate > CAST(GETDATE() AS DATE) THEN 'Scheduled'
             WHEN m.HomeScore IS NULL OR m.AwayScore IS NULL THEN 'Scheduled'
+            WHEN NOT (m.HomeScore = 0 AND m.AwayScore = 0) THEN 'Completed'
             ELSE 'Completed'
         END AS MatchStatus,
+        CASE
+            WHEN m.ScoreStatus IN ('Pending', 'Confirmed', 'Unavailable') THEN m.ScoreStatus
+            WHEN m.ResultReadyFlag = 1 THEN 'Confirmed'
+            WHEN m.HomeScore IS NULL OR m.AwayScore IS NULL THEN 'Unavailable'
+            WHEN m.MatchDate <= CAST(GETDATE() AS DATE) AND NOT (m.HomeScore = 0 AND m.AwayScore = 0) THEN 'Confirmed'
+            ELSE 'Pending'
+        END AS ScoreStatus,
+        CAST(CASE
+            WHEN m.ResultReadyFlag = 1 THEN 1
+            WHEN m.ScoreStatus = 'Confirmed' AND m.HomeScore IS NOT NULL AND m.AwayScore IS NOT NULL THEN 1
+            WHEN m.MatchDate <= CAST(GETDATE() AS DATE)
+                 AND m.HomeScore IS NOT NULL
+                 AND m.AwayScore IS NOT NULL
+                 AND NOT (m.HomeScore = 0 AND m.AwayScore = 0) THEN 1
+            ELSE 0
+        END AS BIT) AS ResultReadyFlag,
+        COALESCE(
+            m.ScoreSource,
+            CASE
+                WHEN m.MatchDate <= CAST(GETDATE() AS DATE)
+                     AND m.HomeScore IS NOT NULL
+                     AND m.AwayScore IS NOT NULL
+                     AND NOT (m.HomeScore = 0 AND m.AwayScore = 0)
+                THEN 'Legacy NPC_Matches score'
+                ELSE NULL
+            END
+        ) AS ScoreSource,
+        COALESCE(
+            m.ScoreCapturedAt,
+            CASE
+                WHEN m.MatchDate <= CAST(GETDATE() AS DATE)
+                     AND m.HomeScore IS NOT NULL
+                     AND m.AwayScore IS NOT NULL
+                     AND NOT (m.HomeScore = 0 AND m.AwayScore = 0)
+                THEN SYSUTCDATETIME()
+                ELSE NULL
+            END
+        ) AS ScoreCapturedAt,
+        COALESCE(
+            m.ResultValidationStatus,
+            CASE
+                WHEN m.ResultReadyFlag = 1 THEN 'Valid'
+                WHEN m.ScoreStatus = 'Confirmed' AND m.HomeScore IS NOT NULL AND m.AwayScore IS NOT NULL THEN 'Valid'
+                WHEN m.MatchDate <= CAST(GETDATE() AS DATE)
+                     AND m.HomeScore IS NOT NULL
+                     AND m.AwayScore IS NOT NULL
+                     AND NOT (m.HomeScore = 0 AND m.AwayScore = 0)
+                THEN 'Valid legacy score'
+                ELSE 'Awaiting source confirmation'
+            END
+        ) AS ResultValidationStatus,
         'RugbyPass' AS SourceSystem,
         CONCAT(
             'https://www.rugbypass.com/live/',
@@ -142,17 +240,24 @@ WHEN MATCHED THEN UPDATE SET
     HomeScore = s.HomeScore,
     AwayScore = s.AwayScore,
     MatchStatus = s.MatchStatus,
+    ScoreStatus = s.ScoreStatus,
+    ResultReadyFlag = s.ResultReadyFlag,
+    ScoreSource = s.ScoreSource,
+    ScoreCapturedAt = s.ScoreCapturedAt,
+    ResultValidationStatus = s.ResultValidationStatus,
     SourceSystem = s.SourceSystem,
     SourceURL = s.SourceURL,
     UpdatedAt = SYSUTCDATETIME()
 WHEN NOT MATCHED THEN INSERT (
     MatchID, SeasonID, RoundName, MatchDate, KickoffDateTimeLocal, KickoffDateTimeUTC,
     KickoffTimeKnownFlag, KickoffTimeSource, KickoffTimeCapturedAt, VenueID, HomeTeamID, AwayTeamID,
-    HomeScore, AwayScore, MatchStatus, SourceSystem, SourceURL
+    HomeScore, AwayScore, MatchStatus, ScoreStatus, ResultReadyFlag, ScoreSource, ScoreCapturedAt,
+    ResultValidationStatus, SourceSystem, SourceURL
 ) VALUES (
     s.MatchID, s.SeasonID, s.RoundName, s.MatchDate, s.KickoffDateTimeLocal, s.KickoffDateTimeUTC,
     s.KickoffTimeKnownFlag, s.KickoffTimeSource, s.KickoffTimeCapturedAt, s.VenueID, s.HomeTeamID,
-    s.AwayTeamID, s.HomeScore, s.AwayScore, s.MatchStatus, s.SourceSystem, s.SourceURL
+    s.AwayTeamID, s.HomeScore, s.AwayScore, s.MatchStatus, s.ScoreStatus, s.ResultReadyFlag,
+    s.ScoreSource, s.ScoreCapturedAt, s.ResultValidationStatus, s.SourceSystem, s.SourceURL
 );
 
 MERGE Silver_Players AS t

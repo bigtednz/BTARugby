@@ -1,0 +1,6 @@
+dash>=2.17,<3
+dash-bootstrap-components>=1.6,<2
+pandas>=2.2,<3
+plotly>=5.22,<6
+pyodbc>=5.3,<6
+SQLAlchemy>=2.0,<3
